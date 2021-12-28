@@ -99,10 +99,30 @@ void drawCar(Pose pose, int num, Color color, double alpha, pcl::visualization::
 	renderBox(viewer, box, num, color, alpha);
 }
 
+pair<Eigen::Matrix4d, PointCloudT::Ptr> NDT(pcl::NormalDistributionsTransform<pcl::PointXYZ, pcl::PointXYZ> ndt, PointCloudT::Ptr source, Pose startingPose, int iterations){
+	ndt.setMaximumIterations(iterations);
+	ndt.setInputSource(source);
+
+	Point& startPos = startingPose.position;
+	Rotate& startRot = startingPose.rotation;
+	Eigen::Matrix4d startingTrans = transform3D(startRot.yaw, startRot.pitch, startRot.roll,
+											  	startPos.x, startPos.y, startPos.z);
+  	
+	PointCloudT::Ptr aligned (new PointCloudT);
+	ndt.align(*aligned, startingTrans.cast<float>());
+
+	if (!ndt.hasConverged()) {
+		std::cout << "didn't converge" << std::endl;
+		return {Eigen::Matrix4d::Identity(), aligned};
+	}
+	return {ndt.getFinalTransformation().cast<double>(), aligned};
+}
+
+
 int main(){
 
 	auto client = cc::Client("localhost", 2000);
-	client.SetTimeout(2s);
+	client.SetTimeout(10s);
 	auto world = client.GetWorld();
 
 	auto blueprint_library = world.GetBlueprintLibrary();
@@ -142,6 +162,13 @@ int main(){
   	cout << "Loaded " << mapCloud->points.size() << " data points from map.pcd" << endl;
 	renderPointCloud(viewer, mapCloud, "map", Color(0,0,1)); 
 
+	// Set NDT object for target cloud (map)
+	pcl::NormalDistributionsTransform<pcl::PointXYZ, pcl::PointXYZ> ndt;
+	ndt.setInputTarget(mapCloud);
+	ndt.setTransformationEpsilon(.0001);
+	ndt.setResolution(1);
+	ndt.setStepSize(1);
+
 	typename pcl::PointCloud<PointT>::Ptr cloudFiltered (new pcl::PointCloud<PointT>);
 	typename pcl::PointCloud<PointT>::Ptr scanCloud (new pcl::PointCloud<PointT>);
 
@@ -150,7 +177,7 @@ int main(){
 		if(new_scan){
 			auto scan = boost::static_pointer_cast<csd::LidarMeasurement>(data);
 			for (auto detection : *scan){
-				if((detection.point.x*detection.point.x + detection.point.y*detection.point.y + detection.point.z*detection.point.z) > 8.0){ // Don't include points touching ego
+				if((detection.point.x*detection.point.x + detection.point.y*detection.point.y + detection.point.z*detection.point.z) > 900){ // Don't include points touching ego
 					pclCloud.points.push_back(PointT(detection.point.x, detection.point.y, detection.point.z));
 				}
 			}
@@ -201,15 +228,20 @@ int main(){
 			
 			new_scan = true;
 			// TODO: (Filter scan using voxel filter)
+			pcl::VoxelGrid<PointT> vg;
+			vg.setInputCloud(scanCloud);
+			vg.setLeafSize(1, 1, 1);
+			vg.filter(*cloudFiltered);
 
 			// TODO: Find pose transform by using ICP or NDT matching
-			//pose = ....
-
 			// TODO: Transform scan so it aligns with ego's actual pose and render that scan
+	
+			auto [transform, scanAligned] = NDT(ndt, cloudFiltered, pose, 100);
+			pose = getPose(transform);
 
 			viewer->removePointCloud("scan");
 			// TODO: Change `scanCloud` below to your transformed scan
-			renderPointCloud(viewer, scanCloud, "scan", Color(1,0,0) );
+			renderPointCloud(viewer, scanAligned, "scan", Color(1,0,0) );
 
 			viewer->removeAllShapes();
 			drawCar(pose, 1,  Color(0,1,0), 0.35, viewer);
