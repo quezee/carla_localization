@@ -31,6 +31,7 @@ using namespace std;
 #include <sstream>
 #include <chrono> 
 #include <ctime> 
+#include <cmath>
 #include <pcl/registration/icp.h>
 #include <pcl/registration/ndt.h>
 #include <pcl/console/time.h>   // TicToc
@@ -88,7 +89,7 @@ void Accuate(ControlState response, cc::Vehicle::Control& state){
 	state.brake = response.b;
 }
 
-void drawCar(Pose pose, int num, Color color, double alpha, pcl::visualization::PCLVisualizer::Ptr& viewer){
+void drawCar(const Pose& pose, int num, const Color& color, double alpha, pcl::visualization::PCLVisualizer::Ptr& viewer){
 
 	BoxQ box;
 	box.bboxTransform = Eigen::Vector3f(pose.position.x, pose.position.y, 0);
@@ -99,23 +100,30 @@ void drawCar(Pose pose, int num, Color color, double alpha, pcl::visualization::
 	renderBox(viewer, box, num, color, alpha);
 }
 
-pair<Eigen::Matrix4d, PointCloudT::Ptr> NDT(pcl::NormalDistributionsTransform<pcl::PointXYZ, pcl::PointXYZ> ndt, PointCloudT::Ptr source, Pose startingPose, int iterations){
-	ndt.setMaximumIterations(iterations);
-	ndt.setInputSource(source);
+Pose getTruePose(const boost::shared_ptr<cc::Vehicle>& vehicle, Pose poseRef = Pose()) {
+	const cg::Transform& transform = vehicle->GetTransform();
+	Point pos (transform.location.x, transform.location.y, transform.location.z);
+	Rotate rot (transform.rotation.yaw * pi/180, transform.rotation.pitch * pi/180, transform.rotation.roll * pi/180);
+	return Pose(pos, rot) - poseRef;
+}
 
+pair<Eigen::Matrix4d, PointCloudT::Ptr> NDT(pcl::NormalDistributionsTransform<pcl::PointXYZ, pcl::PointXYZ>& ndt,
+											const PointCloudT::Ptr& source, const Pose& startingPose){
 	Point& startPos = startingPose.position;
 	Rotate& startRot = startingPose.rotation;
 	Eigen::Matrix4d startingTrans = transform3D(startRot.yaw, startRot.pitch, startRot.roll,
 											  	startPos.x, startPos.y, startPos.z);
   	
 	PointCloudT::Ptr aligned (new PointCloudT);
+	ndt.setInputSource(source);
 	ndt.align(*aligned, startingTrans.cast<float>());
 
 	if (!ndt.hasConverged()) {
 		std::cout << "didn't converge" << std::endl;
 		return {Eigen::Matrix4d::Identity(), aligned};
 	}
-	return {ndt.getFinalTransformation().cast<double>(), aligned};
+	Eigen::Matrix4d transform = ndt.getFinalTransformation().cast<double>();
+	return {transform, aligned};
 }
 
 
@@ -162,22 +170,28 @@ int main(){
   	cout << "Loaded " << mapCloud->points.size() << " data points from map.pcd" << endl;
 	renderPointCloud(viewer, mapCloud, "map", Color(0,0,1)); 
 
+	typename pcl::PointCloud<PointT>::Ptr cloudFiltered (new pcl::PointCloud<PointT>);
+	typename pcl::PointCloud<PointT>::Ptr scanCloud (new pcl::PointCloud<PointT>);
+
 	// Set NDT object for target cloud (map)
 	pcl::NormalDistributionsTransform<pcl::PointXYZ, pcl::PointXYZ> ndt;
 	ndt.setInputTarget(mapCloud);
-	ndt.setTransformationEpsilon(.0001);
+	ndt.setTransformationEpsilon(1e-8);
 	ndt.setResolution(1);
-	ndt.setStepSize(1);
+	// ndt.setStepSize(.5);
+	ndt.setMaximumIterations(60);
 
-	typename pcl::PointCloud<PointT>::Ptr cloudFiltered (new pcl::PointCloud<PointT>);
-	typename pcl::PointCloud<PointT>::Ptr scanCloud (new pcl::PointCloud<PointT>);
+	// Set VoxelGrid
+	pcl::VoxelGrid<PointT> vg;
+	vg.setInputCloud(scanCloud);
+	vg.setLeafSize(.5, .5, .5);	
 
 	lidar->Listen([&new_scan, &lastScanTime, &scanCloud](auto data){
 
 		if(new_scan){
 			auto scan = boost::static_pointer_cast<csd::LidarMeasurement>(data);
 			for (auto detection : *scan){
-				if((detection.point.x*detection.point.x + detection.point.y*detection.point.y + detection.point.z*detection.point.z) > 900){ // Don't include points touching ego
+				if((detection.point.x*detection.point.x + detection.point.y*detection.point.y + detection.point.z*detection.point.z) > 8){ // Don't include points touching ego
 					pclCloud.points.push_back(PointT(detection.point.x, detection.point.y, detection.point.z));
 				}
 			}
@@ -189,7 +203,7 @@ int main(){
 		}
 	});
 	
-	Pose poseRef(Point(vehicle->GetTransform().location.x, vehicle->GetTransform().location.y, vehicle->GetTransform().location.z), Rotate(vehicle->GetTransform().rotation.yaw * pi/180, vehicle->GetTransform().rotation.pitch * pi/180, vehicle->GetTransform().rotation.roll * pi/180));
+	Pose poseRef = getTruePose(vehicle);
 	double maxError = 0;
 
 	while (!viewer->wasStopped())
@@ -205,7 +219,7 @@ int main(){
 		
 		viewer->removeShape("box0");
 		viewer->removeShape("boxFill0");
-		Pose truePose = Pose(Point(vehicle->GetTransform().location.x, vehicle->GetTransform().location.y, vehicle->GetTransform().location.z), Rotate(vehicle->GetTransform().rotation.yaw * pi/180, vehicle->GetTransform().rotation.pitch * pi/180, vehicle->GetTransform().rotation.roll * pi/180)) - poseRef;
+		Pose truePose = getTruePose(vehicle, poseRef);
 		drawCar(truePose, 0,  Color(1,0,0), 0.7, viewer);
 		double theta = truePose.rotation.yaw;
 		double stheta = control.steer * pi/4 + theta;
@@ -228,15 +242,11 @@ int main(){
 			
 			new_scan = true;
 			// TODO: (Filter scan using voxel filter)
-			pcl::VoxelGrid<PointT> vg;
-			vg.setInputCloud(scanCloud);
-			vg.setLeafSize(1, 1, 1);
 			vg.filter(*cloudFiltered);
 
 			// TODO: Find pose transform by using ICP or NDT matching
 			// TODO: Transform scan so it aligns with ego's actual pose and render that scan
-	
-			auto [transform, scanAligned] = NDT(ndt, cloudFiltered, pose, 100);
+			auto [transform, scanAligned] = NDT(ndt, cloudFiltered, pose);
 			pose = getPose(transform);
 
 			viewer->removePointCloud("scan");
@@ -246,10 +256,10 @@ int main(){
 			viewer->removeAllShapes();
 			drawCar(pose, 1,  Color(0,1,0), 0.35, viewer);
           
-          	double poseError = sqrt( (truePose.position.x - pose.position.x) * (truePose.position.x - pose.position.x) + (truePose.position.y - pose.position.y) * (truePose.position.y - pose.position.y) );
+          	double poseError = sqrt( pow(truePose.position.x - pose.position.x, 2) + pow(truePose.position.y - pose.position.y, 2) );
 			if(poseError > maxError)
 				maxError = poseError;
-			double distDriven = sqrt( (truePose.position.x) * (truePose.position.x) + (truePose.position.y) * (truePose.position.y) );
+			double distDriven = sqrt( pow(truePose.position.x, 2) + pow(truePose.position.y, 2) );
 			viewer->removeShape("maxE");
 			viewer->addText("Max Error: "+to_string(maxError)+" m", 200, 100, 32, 1.0, 1.0, 1.0, "maxE",0);
 			viewer->removeShape("derror");
