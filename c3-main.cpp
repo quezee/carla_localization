@@ -109,8 +109,8 @@ Pose getTruePose(const boost::shared_ptr<cc::Vehicle>& vehicle, Pose poseRef = P
 
 pair<Eigen::Matrix4d, PointCloudT::Ptr> NDT(pcl::NormalDistributionsTransform<pcl::PointXYZ, pcl::PointXYZ>& ndt,
 											const PointCloudT::Ptr& source, const Pose& startingPose){
-	Point& startPos = startingPose.position;
-	Rotate& startRot = startingPose.rotation;
+	const Point& startPos = startingPose.position;
+	const Rotate& startRot = startingPose.rotation;
 	Eigen::Matrix4d startingTrans = transform3D(startRot.yaw, startRot.pitch, startRot.roll,
 											  	startPos.x, startPos.y, startPos.z);
   	
@@ -178,13 +178,13 @@ int main(){
 	ndt.setInputTarget(mapCloud);
 	ndt.setTransformationEpsilon(1e-8);
 	ndt.setResolution(1);
-	// ndt.setStepSize(.5);
+	ndt.setStepSize(.5);
 	ndt.setMaximumIterations(60);
 
 	// Set VoxelGrid
 	pcl::VoxelGrid<PointT> vg;
 	vg.setInputCloud(scanCloud);
-	vg.setLeafSize(.5, .5, .5);	
+	vg.setLeafSize(.5, .5, .5);
 
 	lidar->Listen([&new_scan, &lastScanTime, &scanCloud](auto data){
 
