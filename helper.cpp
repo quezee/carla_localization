@@ -1,9 +1,9 @@
 
 #include "helper.h"
 
-Eigen::Matrix4d transform2D(double theta, double xt, double yt){
+Eigen::Matrix4f transform2D(double theta, double xt, double yt){
 
-	Eigen::Matrix4d matrix = Eigen::Matrix4d::Identity ();
+	Eigen::Matrix4f matrix = Eigen::Matrix4f::Identity ();
 
 	matrix(0, 3) = xt;
 	matrix(1, 3) = yt;
@@ -16,9 +16,9 @@ Eigen::Matrix4d transform2D(double theta, double xt, double yt){
 	return matrix;
 }
 
-Eigen::Matrix4d transform3D(double yaw, double pitch, double roll, double xt, double yt, double zt){
+Eigen::Matrix4f transform3D(double yaw, double pitch, double roll, double xt, double yt, double zt){
 
-	Eigen::Matrix4d matrix = Eigen::Matrix4d::Identity ();
+	Eigen::Matrix4f matrix = Eigen::Matrix4f::Identity ();
 
 	matrix(0, 3) = xt;
 	matrix(1, 3) = yt;
@@ -37,13 +37,13 @@ Eigen::Matrix4d transform3D(double yaw, double pitch, double roll, double xt, do
 	return matrix;
 }
 
-Pose getPose(Eigen::Matrix4d matrix){
+Pose getPose(Eigen::Matrix4f matrix){
 
 	Pose pose(Point(matrix(0,3), matrix(1,3), matrix(2,3)), Rotate(atan2(matrix(1, 0),matrix(0, 0)), atan2(-matrix(2,0), sqrt(matrix(2,1)*matrix(2,1) + matrix(2,2)*matrix(2,2))), atan2(matrix(2,1),matrix(2,2))));
 	return pose;
 }
 
-Eigen::Matrix4d getTransform (Pose pose) {
+Eigen::Matrix4f getTransform (Pose pose) {
 	return transform3D(pose.rotation.yaw, pose.rotation.pitch, pose.rotation.roll,
 					   pose.position.x, pose.position.y, pose.position.z);
 }
@@ -65,7 +65,7 @@ double minDistance(Point p1, vector<Point> points){
 	return -1;
 }
 
-void print4x4Matrix (const Eigen::Matrix4d & matrix){
+void print4x4Matrix (const Eigen::Matrix4f & matrix){
   printf ("Rotation matrix :\n");
   printf ("    | %6.3f %6.3f %6.3f | \n", matrix (0, 0), matrix (0, 1), matrix (0, 2));
   printf ("R = | %6.3f %6.3f %6.3f | \n", matrix (1, 0), matrix (1, 1), matrix (1, 2));

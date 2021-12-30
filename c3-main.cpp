@@ -104,19 +104,18 @@ Pose getTruePose(const boost::shared_ptr<cc::Vehicle>& vehicle, Pose poseRef = P
 	return Pose(pos, rot) - poseRef;
 }
 
-pair<Eigen::Matrix4d, PointCloudT::Ptr> NDT(pcl::NormalDistributionsTransform<pcl::PointXYZ, pcl::PointXYZ>& ndt,
-											const PointCloudT::Ptr& source, const Pose& startingPose){
-	Eigen::Matrix4d startingTrans = getTransform(startingPose);
+pair<Eigen::Matrix4f, PointCloudT::Ptr> NDT(pcl::NormalDistributionsTransform<pcl::PointXYZ, pcl::PointXYZ>& ndt,
+											const Pose& startingPose){
+	Eigen::Matrix4f startingTrans = getTransform(startingPose);
   	
 	PointCloudT::Ptr aligned (new PointCloudT);
-	ndt.setInputSource(source);
-	ndt.align(*aligned, startingTrans.cast<float>());
+	ndt.align(*aligned, startingTrans);
 
 	if (!ndt.hasConverged()) {
 		std::cout << "didn't converge" << std::endl;
-		return {Eigen::Matrix4d::Identity(), aligned};
+		return {Eigen::Matrix4f::Identity(), aligned};
 	}
-	Eigen::Matrix4d transform = ndt.getFinalTransformation().cast<double>();
+	Eigen::Matrix4f transform = ndt.getFinalTransformation();
 	return {transform, aligned};
 }
 
@@ -131,8 +130,8 @@ int main(){
 	auto vehicles = blueprint_library->Filter("vehicle");
 
 	auto map = world.GetMap();
-	auto transform = map->GetRecommendedSpawnPoints()[1];
-	auto ego_actor = world.SpawnActor((*vehicles)[12], transform);
+	auto sp_transform = map->GetRecommendedSpawnPoints()[1];
+	auto ego_actor = world.SpawnActor((*vehicles)[12], sp_transform);
 
 	//Create lidar
 	auto lidar_bp = *(blueprint_library->Find("sensor.lidar.ray_cast"));
@@ -164,8 +163,10 @@ int main(){
   	cout << "Loaded " << mapCloud->points.size() << " data points from map.pcd" << endl;
 	renderPointCloud(viewer, mapCloud, "map", Color(0,0,1)); 
 
-	typename pcl::PointCloud<PointT>::Ptr cloudFiltered (new pcl::PointCloud<PointT>);
 	typename pcl::PointCloud<PointT>::Ptr scanCloud (new pcl::PointCloud<PointT>);
+	typename pcl::PointCloud<PointT>::Ptr cloudFiltered (new pcl::PointCloud<PointT>);
+	typename pcl::PointCloud<PointT>::Ptr scanAligned (new pcl::PointCloud<PointT>);
+  	Eigen::Matrix4f transform;
 
 	// Init KalmanFilter
 	KalmanFilter kalman(1, 3);
@@ -173,22 +174,23 @@ int main(){
 	// Init NDT object for target cloud (map)
 	pcl::NormalDistributionsTransform<pcl::PointXYZ, pcl::PointXYZ> ndt;
 	ndt.setInputTarget(mapCloud);
-	ndt.setTransformationEpsilon(1e-8);
-	ndt.setResolution(1);
+	ndt.setInputSource(cloudFiltered);
+	ndt.setTransformationEpsilon(1e-3);
+	ndt.setResolution(2);
 	ndt.setStepSize(1);
-	ndt.setMaximumIterations(7);
+	ndt.setMaximumIterations(10);
 
 	// Init voxel filter
 	pcl::VoxelGrid<PointT> vg;
 	vg.setInputCloud(scanCloud);
-	vg.setLeafSize(1, 1, 1);
+	vg.setLeafSize(1.5, 1.5, 1.5);
 
 	lidar->Listen([&new_scan, &lastScanTime, &scanCloud](auto data){
 
 		if(new_scan){
 			auto scan = boost::static_pointer_cast<csd::LidarMeasurement>(data);
 			for (auto detection : *scan){
-				if((detection.point.x*detection.point.x + detection.point.y*detection.point.y + detection.point.z*detection.point.z) > 8){ // Don't include points touching ego
+				if((detection.point.x*detection.point.x + detection.point.y*detection.point.y + detection.point.z*detection.point.z) > 100){ // Don't include points touching ego
 					pclCloud.points.push_back(PointT(detection.point.x, detection.point.y, detection.point.z));
 				}
 			}
@@ -202,7 +204,7 @@ int main(){
 	
 	Pose poseRef = getTruePose(vehicle);
 	double maxError = 0;
-
+  
 	while (!viewer->wasStopped())
   	{
 		while(new_scan){
@@ -242,15 +244,14 @@ int main(){
 			vg.filter(*cloudFiltered);
 
 			// TODO: Find pose transform by using ICP or NDT matching
-			// TODO: Transform scan so it aligns with ego's actual pose and render that scan
-			auto [transform, scanAligned] = NDT(ndt, cloudFiltered, truePose);
+			auto [transform, scanAligned] = NDT(ndt, pose);
 			pose = getPose(transform);
 
-			// Update state
+			// TODO: Transform scan so it aligns with ego's actual pose and render that scan
 			kalman.Update(pose);
 			pose.position = kalman.getPosition();
 			transform = getTransform(pose);
-			pcl::transformPointCloud(*cloudFiltered, *scanAligned, transform);
+          	pcl::transformPointCloud(*cloudFiltered, *scanAligned, transform);
 
 			viewer->removePointCloud("scan");
 			// TODO: Change `scanCloud` below to your transformed scan

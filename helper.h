@@ -97,13 +97,13 @@ struct BoxQ
     float cube_height;
 };
 
-Eigen::Matrix4d transform2D(double theta, double xt, double yt);
-Eigen::Matrix4d transform3D(double yaw, double pitch, double roll, double xt, double yt, double zt);
-Pose getPose(Eigen::Matrix4d matrix);
-Eigen::Matrix4d getTransform (Pose pose);
+Eigen::Matrix4f transform2D(double theta, double xt, double yt);
+Eigen::Matrix4f transform3D(double yaw, double pitch, double roll, double xt, double yt, double zt);
+Pose getPose(Eigen::Matrix4f matrix);
+Eigen::Matrix4f getTransform (Pose pose);
 double getDistance(Point p1, Point p2);
 double minDistance(Point p1, vector<Point> points);
-void print4x4Matrix (const Eigen::Matrix4d & matrix);
+void print4x4Matrix (const Eigen::Matrix4f & matrix);
 void print4x4Matrixf (const Eigen::Matrix4f & matrix);
 void renderPointCloud(pcl::visualization::PCLVisualizer::Ptr& viewer, const pcl::PointCloud<pcl::PointXYZ>::Ptr& cloud, std::string name, Color color, int renderSize = 4);
 void renderRay(pcl::visualization::PCLVisualizer::Ptr& viewer, Point p1, Point p2, std::string name, Color color);
