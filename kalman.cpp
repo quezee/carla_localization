@@ -42,12 +42,11 @@ Eigen::Vector3f KalmanFilter::stateToMeas() const {
 
 void KalmanFilter::Update(const Pose& meas) {
     Predict();
-    Eigen::Vector3f z (meas.position.x, meas.position.y, meas.position.z);
-    Eigen::Vector3f gamma = z - stateToMeas();
-    Eigen::MatrixXf S = P.topLeftCorner(3, 3) + R; // H * P * H.transpose() + R
-    Eigen::MatrixXf K = P.leftCols(3) * S.inverse(); // P * H.transpose() * S.inverse();
-    state = state + K * gamma;
-    P = (I - K * H) * P;
+    z << meas.position.x, meas.position.y, meas.position.z;
+    S = P.topLeftCorner(3, 3) + R; // H * P * H.transpose() + R
+    K = P.leftCols(3) * S.inverse(); // P * H.transpose() * S.inverse();
+    state += K * (z - stateToMeas());
+    P *= (I - K * H);
 }
 
 Point KalmanFilter::getPosition() const {
