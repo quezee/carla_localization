@@ -1,4 +1,18 @@
+#include <string>
+#include <sstream>
+#include <chrono> 
+#include <ctime> 
+#include <cmath>
+#include <thread>
 
+#include <pcl/io/pcd_io.h>
+#include <pcl/visualization/pcl_visualizer.h>
+#include <pcl/filters/voxel_grid.h>
+#include <pcl/registration/icp.h>
+#include <pcl/registration/ndt.h>
+#include <pcl/console/time.h>   // TicToc
+
+#include <carla/client/Vehicle.h>
 #include <carla/client/Client.h>
 #include <carla/client/ActorBlueprint.h>
 #include <carla/client/BlueprintLibrary.h>
@@ -7,34 +21,17 @@
 #include <carla/geom/Transform.h>
 #include <carla/client/Sensor.h>
 #include <carla/sensor/data/LidarMeasurement.h>
-#include <thread>
 
-#include <carla/client/Vehicle.h>
+#include "helper.h"
+#include "kalman.h"
 
-//pcl code
-//#include "render/render.h"
-
+using namespace std::chrono_literals;
+using namespace std::string_literals;
+using namespace std;
 namespace cc = carla::client;
 namespace cg = carla::geom;
 namespace csd = carla::sensor::data;
 
-using namespace std::chrono_literals;
-using namespace std::string_literals;
-
-using namespace std;
-
-#include <string>
-#include <pcl/io/pcd_io.h>
-#include <pcl/visualization/pcl_visualizer.h>
-#include <pcl/filters/voxel_grid.h>
-#include "helper.h"
-#include <sstream>
-#include <chrono> 
-#include <ctime> 
-#include <cmath>
-#include <pcl/registration/icp.h>
-#include <pcl/registration/ndt.h>
-#include <pcl/console/time.h>   // TicToc
 
 PointCloudT pclCloud;
 cc::Vehicle::Control control;
@@ -109,10 +106,7 @@ Pose getTruePose(const boost::shared_ptr<cc::Vehicle>& vehicle, Pose poseRef = P
 
 pair<Eigen::Matrix4d, PointCloudT::Ptr> NDT(pcl::NormalDistributionsTransform<pcl::PointXYZ, pcl::PointXYZ>& ndt,
 											const PointCloudT::Ptr& source, const Pose& startingPose){
-	const Point& startPos = startingPose.position;
-	const Rotate& startRot = startingPose.rotation;
-	Eigen::Matrix4d startingTrans = transform3D(startRot.yaw, startRot.pitch, startRot.roll,
-											  	startPos.x, startPos.y, startPos.z);
+	Eigen::Matrix4d startingTrans = getTransform(startingPose);
   	
 	PointCloudT::Ptr aligned (new PointCloudT);
 	ndt.setInputSource(source);
@@ -173,18 +167,21 @@ int main(){
 	typename pcl::PointCloud<PointT>::Ptr cloudFiltered (new pcl::PointCloud<PointT>);
 	typename pcl::PointCloud<PointT>::Ptr scanCloud (new pcl::PointCloud<PointT>);
 
-	// Set NDT object for target cloud (map)
+	// Init KalmanFilter
+	KalmanFilter kalman(1, 3);
+
+	// Init NDT object for target cloud (map)
 	pcl::NormalDistributionsTransform<pcl::PointXYZ, pcl::PointXYZ> ndt;
 	ndt.setInputTarget(mapCloud);
 	ndt.setTransformationEpsilon(1e-8);
 	ndt.setResolution(1);
-	ndt.setStepSize(.5);
-	ndt.setMaximumIterations(60);
+	ndt.setStepSize(1);
+	ndt.setMaximumIterations(7);
 
-	// Set VoxelGrid
+	// Init voxel filter
 	pcl::VoxelGrid<PointT> vg;
 	vg.setInputCloud(scanCloud);
-	vg.setLeafSize(.5, .5, .5);
+	vg.setLeafSize(1, 1, 1);
 
 	lidar->Listen([&new_scan, &lastScanTime, &scanCloud](auto data){
 
@@ -246,8 +243,14 @@ int main(){
 
 			// TODO: Find pose transform by using ICP or NDT matching
 			// TODO: Transform scan so it aligns with ego's actual pose and render that scan
-			auto [transform, scanAligned] = NDT(ndt, cloudFiltered, pose);
+			auto [transform, scanAligned] = NDT(ndt, cloudFiltered, truePose);
 			pose = getPose(transform);
+
+			// Update state
+			kalman.Update(pose);
+			pose.position = kalman.getPosition();
+			transform = getTransform(pose);
+			pcl::transformPointCloud(*cloudFiltered, *scanAligned, transform);
 
 			viewer->removePointCloud("scan");
 			// TODO: Change `scanCloud` below to your transformed scan
