@@ -43,6 +43,11 @@ Pose getPose(Eigen::Matrix4d matrix){
 	return pose;
 }
 
+Eigen::Matrix4d getTransform (Pose pose) {
+	return transform3D(pose.rotation.yaw, pose.rotation.pitch, pose.rotation.roll,
+					   pose.position.x, pose.position.y, pose.position.z);
+}
+
 double getDistance(Point p1, Point p2){
 	return sqrt( (p1.x-p2.x)*(p1.x-p2.x) + (p1.y-p2.y)*(p1.y-p2.y) + (p1.z-p2.z)*(p1.z-p2.z) );
 }

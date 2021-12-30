@@ -1,3 +1,5 @@
+#pragma once
+
 #include <pcl/io/pcd_io.h>
 #include <pcl/visualization/pcl_visualizer.h>
 #include <math.h>
@@ -98,6 +100,7 @@ struct BoxQ
 Eigen::Matrix4d transform2D(double theta, double xt, double yt);
 Eigen::Matrix4d transform3D(double yaw, double pitch, double roll, double xt, double yt, double zt);
 Pose getPose(Eigen::Matrix4d matrix);
+Eigen::Matrix4d getTransform (Pose pose);
 double getDistance(Point p1, Point p2);
 double minDistance(Point p1, vector<Point> points);
 void print4x4Matrix (const Eigen::Matrix4d & matrix);
