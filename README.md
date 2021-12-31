@@ -11,16 +11,19 @@ Normal Distribution Transform + Kalman Filter.
 ## Result
 
 Pose error doesn't exceed 1.2m for at least 170m ride with speed level up to 4.
-(https://github.com/quezee/carla_localization/blob/main/result.gif)
+
+![](https://github.com/quezee/carla_localization/blob/main/result.gif)
 
 ## Usage
+
+**Warning**: project parameters are finetuned to get accurate localization inside of Udacity virtual environment. Since accuracy depends on host hardware as well, you may not get similar results.
 
 Launch CARLA simulator server:
 ```
 ./run_carla.sh
 ```
 
-Compile and the project:
+Compile and run the project:
 
 ```
 cmake .
@@ -29,4 +32,3 @@ make
 ```
 
 Tap the UP key up to 4 times to gain some speed and use LEFT/RIGHT to steer the wheel.
-**Warning**: project parameters are finetuned to get accurate localization inside of Udacity virtual environment. Since accuracy depends on host hardware as well, you may not get similar results.
