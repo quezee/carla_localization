@@ -18,17 +18,21 @@ Pose error doesn't exceed 1.2m for at least 170m ride with speed level up to 4.
 
 **Warning**: project parameters are finetuned to get accurate localization inside of Udacity virtual environment. Since accuracy depends on host hardware as well, you may not get similar results.
 
-Launch CARLA simulator server:
+1. Pull CARLA simulator image (server)
 ```
-./run_carla.sh
+docker pull carlasim/carla:0.9.13
 ```
-
-Compile and run the project:
-
+2. Launch CARLA server container
 ```
-cmake .
-make
-./cloud_loc
+docker run --privileged --gpus all --net=host carlasim/carla:0.9.13 /bin/bash ./CarlaUE4.sh -RenderOffScreen
+```
+3. Build project image (client) from repo root. It will test connection with CARLA container by the end of build process.
+```
+docker build -t carla_localization --network=host -f docker/Dockerfile .
+```
+4. Launch client container
+```
+docker run --gpus all --net=host -e DISPLAY=$DISPLAY carla_localization
 ```
 
 Tap the UP key up to 4 times to gain some speed and use LEFT/RIGHT to steer the wheel.

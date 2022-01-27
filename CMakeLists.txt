@@ -13,13 +13,13 @@ set(CMAKE_CXX_FLAGS "${CXX_FLAGS} -Wl,-Bstatic -lboost_filesystem -Wl,-Bdynamic"
 
 set(sources src/main.cpp src/helper.cpp src/kalman.cpp)
 
-set(CARLALIB_DIR ${CMAKE_SOURCE_DIR}/libcarla-install/lib)
-set(carla_libs  ${CARLALIB_DIR}/libboost_filesystem.a ${CARLALIB_DIR}/libboost_numpy36.a ${CARLALIB_DIR}/libboost_program_options.a ${CARLALIB_DIR}/libboost_python36.a ${CARLALIB_DIR}/libboost_system.a ${CARLALIB_DIR}/libcarla_client.a ${CARLALIB_DIR}/librpc.a ${CARLALIB_DIR}/libDebugUtils.a ${CARLALIB_DIR}/libDetour.a ${CARLALIB_DIR}/libDetourCrowd.a ${CARLALIB_DIR}/libDetourTileCache.a ${CARLALIB_DIR}/libRecast.a)
+set(CARLALIB_DIR /home/pcl/carla/Examples/CppClient/libcarla-install/lib)
+set(carla_libs  ${CARLALIB_DIR}/libboost_filesystem.a /usr/lib/x86_64-linux-gnu/libboost_numpy3-py36.a ${CARLALIB_DIR}/libboost_program_options.a ${CARLALIB_DIR}/libboost_python36.a ${CARLALIB_DIR}/libboost_system.a ${CARLALIB_DIR}/libcarla_client.a ${CARLALIB_DIR}/librpc.a ${CARLALIB_DIR}/libDebugUtils.a ${CARLALIB_DIR}/libDetour.a ${CARLALIB_DIR}/libDetourCrowd.a ${CARLALIB_DIR}/libDetourTileCache.a ${CARLALIB_DIR}/libRecast.a)
 
-link_directories(libcarla-install/lib)
-include_directories(libcarla-install/include)
-include_directories(libcarla-install/include/system)
-include_directories(rpclib/include)
+link_directories(${CARLALIB_DIR})
+include_directories(${CARLALIB_DIR}/../include)
+include_directories(${CARLALIB_DIR}/../include/system)
+include_directories(${CARLALIB_DIR}/../include/system/rpc)
 
 find_package(PCL 1.2 REQUIRED)
 
