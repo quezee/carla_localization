@@ -30,7 +30,7 @@ docker run --privileged --gpus all --net=host carlasim/carla:0.9.13 /bin/bash ./
 ```
 docker build -t carla_localization --network=host -f docker/Dockerfile .
 ```
-4. Launch client container
+4. Re-run server container and launch client container
 ```
 docker run --gpus all --net=host -e DISPLAY=$DISPLAY carla_localization
 ```
