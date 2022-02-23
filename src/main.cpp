@@ -120,7 +120,7 @@ pair<Eigen::Matrix4f, PointCloudT::Ptr> NDT(pcl::NormalDistributionsTransform<pc
 }
 
 
-int main(){
+int main() {
 
 	auto client = cc::Client("localhost", 2000);
 	client.SetTimeout(10s);
@@ -187,14 +187,13 @@ int main(){
 
 	lidar->Listen([&new_scan, &lastScanTime, &scanCloud](auto data){
 
-		if(new_scan){
+		if (new_scan) {
 			auto scan = boost::static_pointer_cast<csd::LidarMeasurement>(data);
 			for (auto detection : *scan){
-				if((detection.point.x*detection.point.x + detection.point.y*detection.point.y + detection.point.z*detection.point.z) > 100){ // Don't include points touching ego
+				if (std::hypot(detection.point.x, detection.point.y, detection.point.z) > 10) // Don't include points touching ego
 					pclCloud.points.push_back(PointT(detection.point.x, detection.point.y, detection.point.z));
-				}
 			}
-			if(pclCloud.points.size() > 5000){ // CANDO: Can modify this value to get different scan resolutions
+			if (pclCloud.points.size() > 5000){ // CANDO: Can modify this value to get different scan resolutions
 				lastScanTime = std::chrono::system_clock::now();
 				*scanCloud = pclCloud;
 				new_scan = false;
@@ -207,11 +206,11 @@ int main(){
   
 	while (!viewer->wasStopped())
   	{
-		while(new_scan){
+		while (new_scan) {
 			std::this_thread::sleep_for(0.1s);
 			world.Tick(1s);
 		}
-		if(refresh_view){
+		if (refresh_view) {
 			viewer->setCameraPosition(pose.position.x, pose.position.y, 60, pose.position.x+1, pose.position.y+1, 0, 0, 0, 1);
 			refresh_view = false;
 		}
@@ -260,9 +259,9 @@ int main(){
 			viewer->removeAllShapes();
 			drawCar(pose, 1,  Color(0,1,0), 0.35, viewer);
           
-          	double poseError = sqrt( pow(truePose.position.x - pose.position.x, 2) + pow(truePose.position.y - pose.position.y, 2) );
-			if(poseError > maxError)
-				maxError = poseError;
+		  	double poseError = std::hypot(truePose.position.x - pose.position.x,
+										  truePose.position.y - pose.position.y);
+			maxError = max(maxError, poseError);
 			double distDriven = sqrt( pow(truePose.position.x, 2) + pow(truePose.position.y, 2) );
 			viewer->removeShape("maxE");
 			viewer->addText("Max Error: "+to_string(maxError)+" m", 200, 100, 32, 1.0, 1.0, 1.0, "maxE",0);
@@ -271,18 +270,13 @@ int main(){
 			viewer->removeShape("dist");
 			viewer->addText("Distance: "+to_string(distDriven)+" m", 200, 200, 32, 1.0, 1.0, 1.0, "dist",0);
 
-			if(maxError > 1.2 || distDriven >= 170.0 ){
+			if (maxError > 1.2 || distDriven >= 170.0)
 				viewer->removeShape("eval");
-			if(maxError > 1.2){
+			if (maxError > 1.2)
 				viewer->addText("Try Again", 200, 50, 32, 1.0, 0.0, 0.0, "eval",0);
-			}
-			else{
+			else
 				viewer->addText("Passed!", 200, 50, 32, 0.0, 1.0, 0.0, "eval",0);
-			}
 		}
-
-			pclCloud.points.clear();
-		}
-  	}
-	return 0;
+		pclCloud.points.clear();
+	}
 }
