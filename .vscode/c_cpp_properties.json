@@ -1,0 +1,14 @@
+{
+    "configurations": [
+        {
+            "includePath": [
+                "${workspaceFolder}/**",
+                "libcarla-install/include/**",
+                "/usr/include/eigen3",
+                "/usr/local/include/pcl-1.11",
+                "/home/pcl/carla/Examples/CppClient/libcarla-install/include"
+            ]
+        }
+    ],
+    "version": 4
+}
