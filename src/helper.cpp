@@ -1,4 +1,3 @@
-
 #include "helper.h"
 
 Eigen::Matrix4f transform2D(double theta, double xt, double yt){
@@ -65,24 +64,6 @@ double minDistance(Point p1, vector<Point> points){
 	return -1;
 }
 
-void print4x4Matrix (const Eigen::Matrix4f & matrix){
-  printf ("Rotation matrix :\n");
-  printf ("    | %6.3f %6.3f %6.3f | \n", matrix (0, 0), matrix (0, 1), matrix (0, 2));
-  printf ("R = | %6.3f %6.3f %6.3f | \n", matrix (1, 0), matrix (1, 1), matrix (1, 2));
-  printf ("    | %6.3f %6.3f %6.3f | \n", matrix (2, 0), matrix (2, 1), matrix (2, 2));
-  printf ("Translation vector :\n");
-  printf ("t = < %6.3f, %6.3f, %6.3f >\n\n", matrix (0, 3), matrix (1, 3), matrix (2, 3));
-}
-
-void print4x4Matrixf (const Eigen::Matrix4f & matrix){
-  printf ("Rotation matrix :\n");
-  printf ("    | %6.3f %6.3f %6.3f | \n", matrix (0, 0), matrix (0, 1), matrix (0, 2));
-  printf ("R = | %6.3f %6.3f %6.3f | \n", matrix (1, 0), matrix (1, 1), matrix (1, 2));
-  printf ("    | %6.3f %6.3f %6.3f | \n", matrix (2, 0), matrix (2, 1), matrix (2, 2));
-  printf ("Translation vector :\n");
-  printf ("t = < %6.3f, %6.3f, %6.3f >\n\n", matrix (0, 3), matrix (1, 3), matrix (2, 3));
-}
-
 void renderPointCloud(pcl::visualization::PCLVisualizer::Ptr& viewer, const pcl::PointCloud<pcl::PointXYZ>::Ptr& cloud, std::string name, Color color, int renderSize){
     viewer->addPointCloud<pcl::PointXYZ> (cloud, name);
     viewer->setPointCloudRenderingProperties (pcl::visualization::PCL_VISUALIZER_POINT_SIZE, renderSize, name);
@@ -135,4 +116,47 @@ void renderBox(pcl::visualization::PCLVisualizer::Ptr& viewer, BoxQ box, int id,
     viewer->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_OPACITY, opacity*0.3, cubeFill);
 }
 
+void Accuate(ControlState response, cc::Vehicle::Control& state){
 
+	if(response.t > 0){
+		if(!state.reverse){
+			state.throttle = min(state.throttle+response.t, 1.0f);
+		}
+		else{
+			state.reverse = false;
+			state.throttle = min(response.t, 1.0f);
+		}
+	}
+	else if(response.t < 0){
+		response.t = -response.t;
+		if(state.reverse){
+			state.throttle = min(state.throttle+response.t, 1.0f);
+		}
+		else{
+			state.reverse = true;
+			state.throttle = min(response.t, 1.0f);
+
+		}
+	}
+	state.steer = min( max(state.steer+response.s, -1.0f), 1.0f);
+	state.brake = response.b;
+}
+
+void drawCar(const Pose& pose, int num, const Color& color, double alpha,
+			 pcl::visualization::PCLVisualizer::Ptr& viewer)
+{
+	BoxQ box;
+	box.bboxTransform = Eigen::Vector3f(pose.position.x, pose.position.y, 0);
+    box.bboxQuaternion = getQuaternion(pose.rotation.yaw);
+    box.cube_length = 4;
+    box.cube_width = 2;
+    box.cube_height = 2;
+	renderBox(viewer, box, num, color, alpha);
+}
+
+Pose getTruePose(const boost::shared_ptr<cc::Vehicle>& vehicle, Pose poseRef) {
+	const cg::Transform& transform = vehicle->GetTransform();
+	Point pos (transform.location.x, transform.location.y, transform.location.z);
+	Rotate rot (transform.rotation.yaw * pi/180, transform.rotation.pitch * pi/180, transform.rotation.roll * pi/180);
+	return Pose(pos, rot) - poseRef;
+}

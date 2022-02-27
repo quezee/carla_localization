@@ -6,7 +6,9 @@
                 "libcarla-install/include/**",
                 "/usr/include/eigen3",
                 "/usr/local/include/pcl-1.11",
-                "/home/pcl/carla/Examples/CppClient/libcarla-install/include"
+                "/home/pcl/carla/Examples/CppClient/libcarla-install/include",
+                "/usr/local/include/vtk-8.2",
+                "/home/pcl/carla/Examples/CppClient/libcarla-install/include/system"
             ]
         }
     ],
