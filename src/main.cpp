@@ -19,13 +19,15 @@
 #include <carla/geom/Transform.h>
 #include <carla/client/Sensor.h>
 #include <carla/sensor/data/LidarMeasurement.h>
+#include <carla/sensor/data/IMUMeasurement.h>
 
 #include "helper.h"
 #include "kalman.h"
 
-using namespace std::chrono_literals;
-using namespace std::string_literals;
 using namespace std;
+using namespace chrono;
+using namespace chrono_literals;
+using namespace string_literals;
 namespace csd = carla::sensor::data;
 
 template <class T>
@@ -33,7 +35,7 @@ using cptr = carla::SharedPtr<T>;
 
 PointCloudT pclCloud;
 cc::Vehicle::Control control;
-std::chrono::time_point<std::chrono::system_clock> currentTime;
+time_point<system_clock> currentTime;
 vector<ControlState> cs;
 bool refresh_view = false;
 
@@ -58,11 +60,12 @@ class Localizer {
 private:
 	Pose pose;
 	bool scan_is_ready;
-	std::chrono::time_point<std::chrono::system_clock> lastScanTime, startTime;
+	time_point<system_clock> imuScanTime;
 	typename pcl::PointCloud<PointT>::Ptr scanCloud, cloudFiltered;
-	boost::shared_ptr<cc::Sensor> lidar;
+	boost::shared_ptr<cc::Sensor> lidar, imu;
 	pcl::NormalDistributionsTransform<pcl::PointXYZ, pcl::PointXYZ> ndt;
 	pcl::VoxelGrid<PointT> vg;
+	cg::Vector3D acceleration, velocity, accel_ang, vel_ang;
 
 	void initLidar(cc::World& world, cptr<cc::BlueprintLibrary> bpl, cptr<cc::Actor> ego) {
 		auto lidar_bp = *(bpl->Find("sensor.lidar.ray_cast"));
@@ -84,10 +87,37 @@ private:
 						pclCloud.points.push_back(PointT(detection.point.x, detection.point.y, detection.point.z));
 				}
 				if (pclCloud.points.size() > 5000){ // CANDO: Can modify this value to get different scan resolutions
-					lastScanTime = std::chrono::system_clock::now();
 					*scanCloud = pclCloud;
 					scan_is_ready = true;
 				}
+			}
+		});
+	}
+	void initIMU(cc::World& world, cptr<cc::BlueprintLibrary> bpl, cptr<cc::Actor> ego) {
+		auto imu_bp = *(bpl->Find("sensor.other.imu"));
+		auto imu_actor = world.SpawnActor(imu_bp,
+										  cg::Transform(cg::Location(-0.5, 0, 1.8)),
+										  ego.get());
+		imu = boost::static_pointer_cast<cc::Sensor>(imu_actor);
+		imu->Listen([this] (auto data) {
+			if (!scan_is_ready) {
+				auto imu_meas = boost::static_pointer_cast<csd::IMUMeasurement>(data);
+				auto td = duration_cast<milliseconds>(
+					system_clock::now() - imuScanTime
+				);
+				double td_seconds = (double)td.count() / 1000;
+				// update pose
+				pose.position += velocity * td_seconds + acceleration * pow(td_seconds, 2) / 2;
+				pose.rotation += vel_ang * td_seconds + accel_ang * pow(td_seconds, 2) / 2;
+				pose.rotation %= pi * 2;
+				// update pose derivatives
+				velocity += acceleration * td_seconds;
+				acceleration = imu_meas->GetAccelerometer();
+				accel_ang = (imu_meas->GetGyroscope() - vel_ang) / td_seconds;
+				vel_ang = imu_meas->GetGyroscope();
+
+				imuScanTime = system_clock::now();
+				scan_is_ready = true;
 			}
 		});
 	}
@@ -103,7 +133,6 @@ private:
 		vg.setInputCloud(scanCloud);
 		vg.setLeafSize(1.5, 1.5, 1.5);
 	}
-			// auto imu_bp = *(bpl->Find("sensor.other.imu"));
 public:
 	Localizer(cc::World& world, cptr<cc::BlueprintLibrary> bpl,
 			  cptr<cc::Actor> ego, PointCloudT::Ptr mapCloud)
@@ -111,8 +140,10 @@ public:
 		, scanCloud(new pcl::PointCloud<PointT>)
 		, cloudFiltered(new pcl::PointCloud<PointT>)
 		, scan_is_ready(false)
+		, imuScanTime(system_clock::now())
 	{
 		initLidar(world, bpl, ego);
+		initIMU(world, bpl, ego);
 		initNDT(mapCloud);
 		initVG();
 	}
@@ -135,19 +166,25 @@ public:
 		Eigen::Matrix4f transform = ndt.getFinalTransformation();
 		return {transform, aligned};
 	}
+	// const std::shared_ptr<PointCloudT> Localize() {
+	// 	// Filter scan using voxel filter
+	// 	vg.filter(*cloudFiltered);
+
+	// 	// Find pose transform by using NDT matching
+	// 	auto [transform, scanAligned] = NDT(pose);
+	// 	pose = getPose(transform);
+
+	// 	// Transform scan so it aligns with ego's actual pose and render that scan
+	// 	// kalman.Update(pose);
+	// 	// pose.position = kalman.getPosition();
+	// 	transform = getTransform(pose);
+	// 	pcl::transformPointCloud(*cloudFiltered, *scanAligned, transform);
+	// 	scan_is_ready = false;
+	// 	return scanAligned;
+	// }
 	const std::shared_ptr<PointCloudT> Localize() {
-		// Filter scan using voxel filter
-		vg.filter(*cloudFiltered);
-
-		// Find pose transform by using NDT matching
-		auto [transform, scanAligned] = NDT(pose);
-		pose = getPose(transform);
-
-		// Transform scan so it aligns with ego's actual pose and render that scan
-		// kalman.Update(pose);
-		// pose.position = kalman.getPosition();
-		transform = getTransform(pose);
-		pcl::transformPointCloud(*cloudFiltered, *scanAligned, transform);
+		PointCloudT::Ptr scanAligned (new PointCloudT);
+		pcl::transformPointCloud(*cloudFiltered, *scanAligned, getTransform(pose));
 		scan_is_ready = false;
 		return scanAligned;
 	}
@@ -225,7 +262,7 @@ int main() {
 
 			viewer->removeAllShapes();
 			const Pose& pose = localizer.GetPose();
-			drawCar(pose, 1,  Color(0,1,0), 0.35, viewer);
+			drawCar(pose, 1, Color(0,1,0), 0.35, viewer);
           
 		  	double poseError = std::hypot(truePose.position.x - pose.position.x,
 										  truePose.position.y - pose.position.y);

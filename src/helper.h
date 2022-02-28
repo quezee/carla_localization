@@ -25,8 +25,18 @@ struct Point{
 	Point(double setX, double setY, double setZ)
 		: x(setX), y(setY), z(setZ){}
 
+	Point(cg::Vector3D vec)
+		: x(vec.x), y(vec.y), z(vec.z){}
+
 	void Print(){
 		cout << "x: " << x << " y: " << y << " z: " << z << endl;
+	}
+
+	Point& operator+=(const Point& rhs) {
+		this->x += rhs.x;
+		this->y += rhs.y;
+		this->z += rhs.z;
+		return *this;
 	}
 };
 
@@ -38,6 +48,22 @@ struct Rotate{
 
 	Rotate(double setYaw, double setPitch, double setRoll)
 		: yaw(setYaw), pitch(setPitch), roll(setRoll){}
+
+	Rotate(cg::Vector3D vec)
+		: yaw(vec.z), pitch(vec.y), roll(vec.x){}
+
+	Rotate& operator+=(const Rotate& rhs) {
+		this->yaw += rhs.yaw;
+		this->pitch += rhs.pitch;
+		this->roll += rhs.roll;
+		return *this;
+	}
+	Rotate& operator%=(double mod) {
+		this->yaw = fmod(this->yaw, mod);
+		this->pitch = fmod(this->pitch, mod);
+		this->roll = fmod(this->roll, mod);
+		return *this;
+	}	
 
 	void Print(){
 		cout << "yaw: " << yaw << " pitch: " << pitch << " roll: " << roll << endl;
