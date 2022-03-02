@@ -99,10 +99,10 @@ Eigen::Quaternionf getQuaternion(float theta)
 
 void renderBox(pcl::visualization::PCLVisualizer::Ptr& viewer, BoxQ box, int id, Color color, float opacity)
 {
-    if(opacity > 1.0)
-    	opacity = 1.0;
-    if(opacity < 0.0)
-        opacity = 0.0;
+    if (opacity > 1)
+    	opacity = 1;
+    else if (opacity < 0)
+        opacity = 0;
     std::string cube = "box"+std::to_string(id);
     viewer->addCube(box.bboxTransform, box.bboxQuaternion, box.cube_length, box.cube_width, box.cube_height, cube);
     viewer->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_REPRESENTATION, pcl::visualization::PCL_VISUALIZER_REPRESENTATION_WIREFRAME, cube);
