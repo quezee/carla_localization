@@ -59,13 +59,14 @@ void keyboardEventOccurred(const pcl::visualization::KeyboardEvent &event, void*
 class Localizer {
 private:
 	Pose pose;
-	bool scan_is_ready;
-	time_point<system_clock> imuScanTime;
+	bool ndtReady, imuReady;
+	time_point<system_clock> lastUpdateTime;
 	typename pcl::PointCloud<PointT>::Ptr scanCloud, cloudFiltered;
 	boost::shared_ptr<cc::Sensor> lidar, imu;
 	pcl::NormalDistributionsTransform<pcl::PointXYZ, pcl::PointXYZ> ndt;
 	pcl::VoxelGrid<PointT> vg;
-	cg::Vector3D acceleration, velocity, accel_ang, vel_ang;
+	Measurement meas;
+	KalmanFilter kalman;
 
 	void initLidar(cc::World& world, cptr<cc::BlueprintLibrary> bpl, cptr<cc::Actor> ego) {
 		auto lidar_bp = *(bpl->Find("sensor.lidar.ray_cast"));
@@ -80,7 +81,7 @@ private:
 											ego.get());
 		lidar = boost::static_pointer_cast<cc::Sensor>(lidar_actor);
 		lidar->Listen([this] (auto data) {
-			if (!scan_is_ready) {
+			if (!ndtReady) {
 				auto scan = boost::static_pointer_cast<csd::LidarMeasurement>(data);
 				for (auto detection : *scan){
 					if (std::hypot(detection.point.x, detection.point.y, detection.point.z) > 10) // Don't include points touching ego
@@ -88,7 +89,7 @@ private:
 				}
 				if (pclCloud.points.size() > 5000){ // CANDO: Can modify this value to get different scan resolutions
 					*scanCloud = pclCloud;
-					scan_is_ready = true;
+					ndtReady = true;
 				}
 			}
 		});
@@ -100,34 +101,23 @@ private:
 										  ego.get());
 		imu = boost::static_pointer_cast<cc::Sensor>(imu_actor);
 		imu->Listen([this] (auto data) {
-			if (!scan_is_ready) {
+			if (!imuReady) {
 				auto imu_meas = boost::static_pointer_cast<csd::IMUMeasurement>(data);
-				auto td = duration_cast<milliseconds>(
-					system_clock::now() - imuScanTime
-				);
-				double td_seconds = (double)td.count() / 1000;
-				// update pose
-				pose.position += velocity * td_seconds + acceleration * pow(td_seconds, 2) / 2;
-				pose.rotation += vel_ang * td_seconds + accel_ang * pow(td_seconds, 2) / 2;
-				pose.rotation %= pi * 2;
-				// update pose derivatives
-				velocity += acceleration * td_seconds;
-				acceleration = imu_meas->GetAccelerometer();
-				accel_ang = (imu_meas->GetGyroscope() - vel_ang) / td_seconds;
-				vel_ang = imu_meas->GetGyroscope();
-
-				imuScanTime = system_clock::now();
-				scan_is_ready = true;
+				cg::Vector3D accel = imu_meas->GetAccelerometer();
+				meas.ax = accel.x;
+				meas.ay = accel.y;
+				meas.v_yaw = imu_meas->GetGyroscope().z;
+				imuReady = true;
 			}
 		});
 	}
 	void initNDT(PointCloudT::Ptr mapCloud) {
 		ndt.setInputTarget(mapCloud);
 		ndt.setInputSource(cloudFiltered);
-		ndt.setTransformationEpsilon(1e-3);
-		ndt.setResolution(2);
-		ndt.setStepSize(1);
-		ndt.setMaximumIterations(10);
+		ndt.setTransformationEpsilon(1e-2);
+		ndt.setResolution(1);
+		ndt.setStepSize(0.1);
+		ndt.setMaximumIterations(35);
 	}
 	void initVG() {
 		vg.setInputCloud(scanCloud);
@@ -139,16 +129,17 @@ public:
 		: pose(Point(0,0,0), Rotate(0,0,0))
 		, scanCloud(new pcl::PointCloud<PointT>)
 		, cloudFiltered(new pcl::PointCloud<PointT>)
-		, scan_is_ready(false)
-		, imuScanTime(system_clock::now())
+		, ndtReady(false), imuReady(false)
+		, lastUpdateTime(system_clock::now())
+		, kalman(0)
 	{
 		initLidar(world, bpl, ego);
 		initIMU(world, bpl, ego);
 		initNDT(mapCloud);
 		initVG();
 	}
-	bool ScanIsReady() const {
-		return scan_is_ready;
+	bool MeasurementIsReady() const {
+		return ndtReady && imuReady;
 	}
 	const Pose& GetPose() const {
 		return pose;
@@ -166,26 +157,35 @@ public:
 		Eigen::Matrix4f transform = ndt.getFinalTransformation();
 		return {transform, aligned};
 	}
-	// const std::shared_ptr<PointCloudT> Localize() {
-	// 	// Filter scan using voxel filter
-	// 	vg.filter(*cloudFiltered);
-
-	// 	// Find pose transform by using NDT matching
-	// 	auto [transform, scanAligned] = NDT(pose);
-	// 	pose = getPose(transform);
-
-	// 	// Transform scan so it aligns with ego's actual pose and render that scan
-	// 	// kalman.Update(pose);
-	// 	// pose.position = kalman.getPosition();
-	// 	transform = getTransform(pose);
-	// 	pcl::transformPointCloud(*cloudFiltered, *scanAligned, transform);
-	// 	scan_is_ready = false;
-	// 	return scanAligned;
-	// }
 	const std::shared_ptr<PointCloudT> Localize() {
-		PointCloudT::Ptr scanAligned (new PointCloudT);
-		pcl::transformPointCloud(*cloudFiltered, *scanAligned, getTransform(pose));
-		scan_is_ready = false;
+		// Filter scan using voxel filter
+		vg.filter(*cloudFiltered);
+
+		// Find pose transform by using NDT matching
+		auto [transform, scanAligned] = NDT(pose);
+		pose = getPose(transform);
+
+		// Fulfill measurement
+		meas.x = pose.position.x;
+		meas.y = pose.position.y;
+		meas.yaw = pose.rotation.yaw;
+
+		// Update timedelta
+		auto dt = duration_cast<milliseconds>(
+			system_clock::now() - lastUpdateTime
+		);
+		double dt_sec = (double)dt.count() / 1000;
+
+		// Get updated KF state
+		kalman.Update(meas, dt_sec);
+		pose = kalman.getPose();
+
+		// Transform scan so it aligns with ego's actual pose and render the scan
+		transform = getTransform(pose);
+		pcl::transformPointCloud(*cloudFiltered, *scanAligned, transform);
+		ndtReady = false;
+		imuReady = false;
+		lastUpdateTime = system_clock::now();
 		return scanAligned;
 	}
 };
@@ -219,15 +219,12 @@ int main() {
 
 	Localizer localizer (world, blueprint_library, ego, mapCloud);
 
-	// Init KalmanFilter
-	KalmanFilter kalman(1, 3);
-
 	Pose poseRef = getTruePose(vehicle);
 	double maxError = 0;
   
 	while (!viewer->wasStopped())
   	{
-		while (!localizer.ScanIsReady())
+		while (!localizer.MeasurementIsReady())
 			std::this_thread::sleep_for(0.1s);
 
 		if (refresh_view) {
@@ -239,7 +236,7 @@ int main() {
 		viewer->removeShape("box0");
 		viewer->removeShape("boxFill0");
 		Pose truePose = getTruePose(vehicle, poseRef);
-		drawCar(truePose, 0,  Color(1,0,0), 0.7, viewer);
+		drawCar(truePose, 0, Color(1,0,0), 0.7, viewer);
 		double theta = truePose.rotation.yaw;
 		double stheta = control.steer * pi/4 + theta;
 		viewer->removeShape("steer");
@@ -256,7 +253,7 @@ int main() {
 
   		viewer->spinOnce ();
 		
-		if (localizer.ScanIsReady()) {
+		if (localizer.MeasurementIsReady()) {
 			viewer->removePointCloud("scan");
 			renderPointCloud(viewer, localizer.Localize(), "scan", Color(1,0,0) );
 
