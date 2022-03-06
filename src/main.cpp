@@ -65,21 +65,23 @@ private:
 	PointCloudT::Ptr currentCloud, cloudFiltered;
 	cptr<cc::Actor> ego;
 	boost::shared_ptr<cc::Sensor> lidar, imu;
+	size_t batch_size;
+	float min_pnt_dist;
 	pcl::NormalDistributionsTransform<pcl::PointXYZ, pcl::PointXYZ> ndt;
-	pcl::VoxelGrid<PointT> vg;
 	Measurement meas;
 	KalmanFilter kalman;
 
 	// void initGPS
 
-	void initLidar(cc::World& world, cptr<cc::BlueprintLibrary> bpl, cptr<cc::Actor> ego) {
+	void initLidar(cc::World& world, cptr<cc::BlueprintLibrary> bpl, cptr<cc::Actor> ego,
+				   const string& rot_frq, const string& pts_per_sec) {
 		auto lidar_bp = *(bpl->Find("sensor.lidar.ray_cast"));
 		lidar_bp.SetAttribute("upper_fov", "15");
 		lidar_bp.SetAttribute("lower_fov", "-25");
 		lidar_bp.SetAttribute("channels", "32");
 		lidar_bp.SetAttribute("range", "30");
-		lidar_bp.SetAttribute("rotation_frequency", "60");
-		lidar_bp.SetAttribute("points_per_second", "10000");
+		lidar_bp.SetAttribute("rotation_frequency", rot_frq);
+		lidar_bp.SetAttribute("points_per_second", pts_per_sec);
 		auto lidar_actor = world.SpawnActor(lidar_bp,
 											cg::Transform(cg::Location(-0.5, 0, 1.8)),
 											ego.get());
@@ -88,10 +90,10 @@ private:
 			if (!ndtReady) {
 				auto scan = boost::static_pointer_cast<csd::LidarMeasurement>(data);
 				for (auto detection : *scan) {
-					if (std::hypot(detection.point.x, detection.point.y, detection.point.z) > 10)
+					if (std::sqrt(std::hypot(detection.point.x, detection.point.y, detection.point.z)) > min_pnt_dist)
 						pclCloud.points.push_back(PointT(detection.point.x, detection.point.y, detection.point.z));
 				}
-				if (pclCloud.size() >= 1000) {
+				if (pclCloud.size() >= batch_size) {
 					// cout << scanCloud->size() << endl;
 					*currentCloud = pclCloud;
 					ndtReady = true;
@@ -99,6 +101,15 @@ private:
 			}
 		});
 	}
+	void initNDT(PointCloudT::Ptr mapCloud, float trans_eps,
+				 float resolution, float step_size, size_t max_iter) {
+		ndt.setInputTarget(mapCloud);
+		ndt.setInputSource(currentCloud);
+		ndt.setTransformationEpsilon(trans_eps);
+		ndt.setResolution(resolution);
+		ndt.setStepSize(step_size);
+		ndt.setMaximumIterations(max_iter);
+	}	
 	void initIMU(cc::World& world, cptr<cc::BlueprintLibrary> bpl, cptr<cc::Actor> ego) {
 		auto imu_bp = *(bpl->Find("sensor.other.imu"));
 		imu_bp.SetAttribute("noise_accel_stddev_x", "0");
@@ -119,33 +130,28 @@ private:
 			}
 		});
 	}
-	void initNDT(PointCloudT::Ptr mapCloud) {
-		ndt.setInputTarget(mapCloud);
-		ndt.setInputSource(currentCloud);
-		ndt.setTransformationEpsilon(1e-2);
-		ndt.setResolution(2);
-		ndt.setStepSize(.5);
-		ndt.setMaximumIterations(35);
-	}
-	void initVG() {
-		vg.setInputCloud(currentCloud);
-		vg.setLeafSize(1, 1, 1);
-	}
 public:
-	Localizer(cc::World& world, cptr<cc::BlueprintLibrary> bpl,
-			  cptr<cc::Actor> ego, PointCloudT::Ptr mapCloud)
+	Localizer(const po::variables_map& vm, cc::World& world,
+			  cptr<cc::BlueprintLibrary> bpl, cptr<cc::Actor> ego,
+			  PointCloudT::Ptr mapCloud)
 		: ego(ego)
-		, pose(Point(0,0,0), Rotate(0,0,0))
+		, batch_size(vm["lidar.batch_size"].as<size_t>())
+		, min_pnt_dist(vm["lidar.min_pnt_dist"].as<float>())
 		, currentCloud(new PointCloudT)
 		, cloudFiltered(new PointCloudT)
 		, ndtReady(false), imuReady(false)
 		, lastUpdateTime(system_clock::now())
 		, kalman(0)
 	{
-		initLidar(world, bpl, ego);
+		initLidar(world, bpl, ego,
+				  vm["lidar.rot_frq"].as<string>(),
+				  vm["lidar.pts_per_sec"].as<string>());
+		initNDT(mapCloud,
+				vm["ndt.trans_eps"].as<float>(),
+				vm["ndt.resolution"].as<float>(),
+				vm["ndt.step_size"].as<float>(),
+				vm["ndt.max_iter"].as<size_t>());
 		initIMU(world, bpl, ego);
-		initNDT(mapCloud);
-		// initVG();
 	}
 	bool MeasurementIsReady() const {
 		return ndtReady && imuReady;
@@ -168,7 +174,6 @@ public:
 	}
 	const std::shared_ptr<PointCloudT> Localize() {
 		// Filter scan using voxel filter
-		// vg.filter(*cloudFiltered);
 		// cout << "Filtered cloud size: " << cloudFiltered->size() << endl;
 		// cout << "Scan cloud size: " << scanCloud->size() << endl;
 
@@ -208,12 +213,21 @@ public:
 	}
 };
 
-po::variables_map parse_arguments(int argc, char *argv[]) {
+po::variables_map parse_config(int argc, char *argv[]) {
 	po::options_description desc("Configuration");
 	desc.add_options()
 		("config", po::value<string>()->default_value("config.cfg"), "path to config")
-		("data.map", po::value<string>(), "path to pcl map")
-		("lidar.batchSize", po::value<int>()->default_value(1000))
+		("data.map", po::value<string>()->required(), "path to pcl map")
+
+		("lidar.batch_size", po::value<size_t>()->required(), "how many points to accumulate to match scans")
+		("lidar.rot_frq", po::value<string>()->required(), "rotation frequency")
+		("lidar.pts_per_sec", po::value<string>()->required(), "points per second")
+		("lidar.min_pnt_dist", po::value<float>()->required(), "filter out closest points within this radius")
+
+		("ndt.trans_eps", po::value<float>()->required(), "transformation epsilon")
+		("ndt.resolution", po::value<float>()->required(), "voxel grid resolution")
+		("ndt.step_size", po::value<float>()->required(), "newton line search max step")
+		("ndt.max_iter", po::value<size_t>()->required(), "newton max iterations")
 	;
 	po::variables_map vm;
 	po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -231,7 +245,7 @@ po::variables_map parse_arguments(int argc, char *argv[]) {
 
 int main(int argc, char *argv[]) {
 
-	po::variables_map vm {parse_arguments(argc, argv)};
+	po::variables_map vm {parse_config(argc, argv)};
 	
 	auto client = cc::Client("localhost", 2000);
 	client.SetTimeout(10s);
@@ -256,7 +270,7 @@ int main(int argc, char *argv[]) {
   	cout << "Loaded " << mapCloud->size() << " data points from map" << endl;
 	renderPointCloud(viewer, mapCloud, "map", Color(0,0,1)); 
 
-	Localizer localizer (world, blueprint_library, ego, mapCloud);
+	Localizer localizer (vm, world, blueprint_library, ego, mapCloud);
 
 	Pose poseRef = getTruePose(vehicle);
 	double maxError = 0;
