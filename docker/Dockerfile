@@ -16,11 +16,12 @@ RUN cd carla/Examples/CppClient && make run
 
 # Insert project files
 COPY /src ./src
-COPY CMakeLists.txt map.pcd ./
+COPY /data ./data
+COPY CMakeLists.txt ./
 
 # Build project
-WORKDIR /home/pcl/build
-RUN cmake .. && make
+WORKDIR /home/pcl
+RUN mkdir build && cd build && cmake .. && make
 
 USER pcl
-CMD ["./cloud_loc"]
+CMD ["./build/cloud_loc"]
