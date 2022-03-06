@@ -1,8 +1,30 @@
 #include <cmath>
 #include "kalman.h"
-
 using namespace Eigen;
 
+KalmanFilter::KalmanFilter(double q)
+    : q(q)
+{
+    state << MatrixXd::Zero(8, 1);
+
+    P << MatrixXd::Identity(8, 8);
+    P *= 100;
+
+    R << MatrixXd::Zero(6, 6);
+    R(0, 0) = 0.1;
+    R(2, 2) = 0.1;
+    R(4, 4) = 0.1;
+
+    H << MatrixXd::Zero(6, 8);
+    H(0, 0) = 1;
+    H(1, 2) = 1;
+    H(2, 3) = 1;
+    H(3, 5) = 1;
+    H(4, 6) = 1;
+    H(5, 7) = 1;
+
+    I << MatrixXd::Identity(8, 8);
+}
 
 void KalmanFilter::setF(double dt) {
     F << MatrixXd::Identity(8, 8);
@@ -19,40 +41,21 @@ void KalmanFilter::setQ(double dt) {
     Q << MatrixXd::Zero(8, 8);
 }
 
-KalmanFilter::KalmanFilter(double q)
-    : q(q)
-{
-    state << MatrixXd::Zero(8, 1);
-
-    P << MatrixXd::Identity(8, 8);
-    // P *= 0.01;
-
-    R << MatrixXd::Zero(6, 6);
-
-    H << MatrixXd::Zero(6, 8);
-    H(0, 0) = 1;
-    H(1, 2) = 1;
-    H(2, 3) = 1;
-    H(3, 5) = 1;
-    H(4, 6) = 1;
-    H(5, 7) = 1;
-
-    I << MatrixXd::Identity(8, 8);
-}
-
-void KalmanFilter::Predict() {
+void KalmanFilter::Predict(double dt) {
+    setF(dt);
+    setQ(dt);
     state = F * state;
     P = F * P * F.transpose() + Q;
 }
 
 void KalmanFilter::Update(const Measurement& meas, double dt) {
-    setF(dt);
-    setQ(dt);
-    Predict();
+    Predict(dt);
     S = H * P * H.transpose() + R;
     K = P * H.transpose() * S.inverse();
     z << meas.x, meas.ax, meas.y, meas.ay, meas.yaw, meas.v_yaw;
+    cout << z << endl << endl;
     state += K * (z - H * state);
+    state(6) = fmod(state(6), 2*M_PI);
     P *= (I - K * H);
 }
 

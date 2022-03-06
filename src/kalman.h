@@ -25,7 +25,7 @@ private:
     double q;                      // process noise var.
     void setF(double dt);
     void setQ(double dt);
-    void Predict();
+    void Predict(double dt);
 public:
     KalmanFilter(double q);
     void Update(const Measurement& meas, double dt);

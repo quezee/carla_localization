@@ -41,7 +41,6 @@ bool refresh_view = false;
 
 void keyboardEventOccurred(const pcl::visualization::KeyboardEvent &event, void* viewer)
 {
-  	//boost::shared_ptr<pcl::visualization::PCLVisualizer> viewer = *static_cast<boost::shared_ptr<pcl::visualization::PCLVisualizer> *>(viewer_void);
 	if (event.getKeySym() == "Right" && event.keyDown())
 		cs.push_back(ControlState(0, -0.02, 0));
 	else if (event.getKeySym() == "Left" && event.keyDown())
@@ -61,7 +60,7 @@ private:
 	Pose pose;
 	bool ndtReady, imuReady;
 	time_point<system_clock> lastUpdateTime;
-	typename pcl::PointCloud<PointT>::Ptr scanCloud, cloudFiltered;
+	PointCloudT::Ptr currentCloud, cloudFiltered;
 	boost::shared_ptr<cc::Sensor> lidar, imu;
 	pcl::NormalDistributionsTransform<pcl::PointXYZ, pcl::PointXYZ> ndt;
 	pcl::VoxelGrid<PointT> vg;
@@ -75,7 +74,7 @@ private:
 		lidar_bp.SetAttribute("channels", "32");
 		lidar_bp.SetAttribute("range", "30");
 		lidar_bp.SetAttribute("rotation_frequency", "60");
-		lidar_bp.SetAttribute("points_per_second", "500000");		
+		lidar_bp.SetAttribute("points_per_second", "10000");
 		auto lidar_actor = world.SpawnActor(lidar_bp,
 											cg::Transform(cg::Location(-0.5, 0, 1.8)),
 											ego.get());
@@ -83,12 +82,13 @@ private:
 		lidar->Listen([this] (auto data) {
 			if (!ndtReady) {
 				auto scan = boost::static_pointer_cast<csd::LidarMeasurement>(data);
-				for (auto detection : *scan){
-					if (std::hypot(detection.point.x, detection.point.y, detection.point.z) > 10) // Don't include points touching ego
+				for (auto detection : *scan) {
+					if (std::hypot(detection.point.x, detection.point.y, detection.point.z) > 10)
 						pclCloud.points.push_back(PointT(detection.point.x, detection.point.y, detection.point.z));
 				}
-				if (pclCloud.points.size() > 5000){ // CANDO: Can modify this value to get different scan resolutions
-					*scanCloud = pclCloud;
+				if (pclCloud.size() >= 1000) {
+					// cout << scanCloud->size() << endl;
+					*currentCloud = pclCloud;
 					ndtReady = true;
 				}
 			}
@@ -96,6 +96,9 @@ private:
 	}
 	void initIMU(cc::World& world, cptr<cc::BlueprintLibrary> bpl, cptr<cc::Actor> ego) {
 		auto imu_bp = *(bpl->Find("sensor.other.imu"));
+		imu_bp.SetAttribute("noise_accel_stddev_x", "0");
+		imu_bp.SetAttribute("noise_accel_stddev_y", "0");
+		imu_bp.SetAttribute("noise_gyro_stddev_z", "0");
 		auto imu_actor = world.SpawnActor(imu_bp,
 										  cg::Transform(cg::Location(-0.5, 0, 1.8)),
 										  ego.get());
@@ -106,29 +109,29 @@ private:
 				cg::Vector3D accel = imu_meas->GetAccelerometer();
 				meas.ax = accel.x;
 				meas.ay = accel.y;
-				meas.v_yaw = imu_meas->GetGyroscope().z;
+				meas.v_yaw = -imu_meas->GetGyroscope().z;
 				imuReady = true;
 			}
 		});
 	}
 	void initNDT(PointCloudT::Ptr mapCloud) {
 		ndt.setInputTarget(mapCloud);
-		ndt.setInputSource(cloudFiltered);
+		ndt.setInputSource(currentCloud);
 		ndt.setTransformationEpsilon(1e-2);
-		ndt.setResolution(1);
-		ndt.setStepSize(0.1);
+		ndt.setResolution(2);
+		ndt.setStepSize(.5);
 		ndt.setMaximumIterations(35);
 	}
 	void initVG() {
-		vg.setInputCloud(scanCloud);
-		vg.setLeafSize(1.5, 1.5, 1.5);
+		vg.setInputCloud(currentCloud);
+		vg.setLeafSize(1, 1, 1);
 	}
 public:
 	Localizer(cc::World& world, cptr<cc::BlueprintLibrary> bpl,
 			  cptr<cc::Actor> ego, PointCloudT::Ptr mapCloud)
 		: pose(Point(0,0,0), Rotate(0,0,0))
-		, scanCloud(new pcl::PointCloud<PointT>)
-		, cloudFiltered(new pcl::PointCloud<PointT>)
+		, currentCloud(new PointCloudT)
+		, cloudFiltered(new PointCloudT)
 		, ndtReady(false), imuReady(false)
 		, lastUpdateTime(system_clock::now())
 		, kalman(0)
@@ -136,7 +139,7 @@ public:
 		initLidar(world, bpl, ego);
 		initIMU(world, bpl, ego);
 		initNDT(mapCloud);
-		initVG();
+		// initVG();
 	}
 	bool MeasurementIsReady() const {
 		return ndtReady && imuReady;
@@ -146,7 +149,7 @@ public:
 	}
 	pair<Eigen::Matrix4f, PointCloudT::Ptr> NDT(const Pose& startingPose) {
 		Eigen::Matrix4f startingTrans = getTransform(startingPose);
-		
+
 		PointCloudT::Ptr aligned (new PointCloudT);
 		ndt.align(*aligned, startingTrans);
 
@@ -159,30 +162,32 @@ public:
 	}
 	const std::shared_ptr<PointCloudT> Localize() {
 		// Filter scan using voxel filter
-		vg.filter(*cloudFiltered);
+		// vg.filter(*cloudFiltered);
+		// cout << "Filtered cloud size: " << cloudFiltered->size() << endl;
+		// cout << "Scan cloud size: " << scanCloud->size() << endl;
 
 		// Find pose transform by using NDT matching
 		auto [transform, scanAligned] = NDT(pose);
 		pose = getPose(transform);
 
 		// Fulfill measurement
-		meas.x = pose.position.x;
-		meas.y = pose.position.y;
-		meas.yaw = pose.rotation.yaw;
+		// meas.x = pose.position.x;
+		// meas.y = pose.position.y;
+		// meas.yaw = pose.rotation.yaw;
 
 		// Update timedelta
-		auto dt = duration_cast<milliseconds>(
-			system_clock::now() - lastUpdateTime
-		);
-		double dt_sec = (double)dt.count() / 1000;
+		// auto dt = duration_cast<milliseconds>(
+		// 	system_clock::now() - lastUpdateTime
+		// );
+		// double dt_sec = (double)dt.count() / 1000;
 
 		// Get updated KF state
-		kalman.Update(meas, dt_sec);
-		pose = kalman.getPose();
+		// kalman.Update(meas, dt_sec);
+		// pose = kalman.getPose();
 
 		// Transform scan so it aligns with ego's actual pose and render the scan
 		transform = getTransform(pose);
-		pcl::transformPointCloud(*cloudFiltered, *scanAligned, transform);
+		pcl::transformPointCloud(*currentCloud, *scanAligned, transform);
 		ndtReady = false;
 		imuReady = false;
 		lastUpdateTime = system_clock::now();
@@ -193,7 +198,6 @@ public:
 
 
 int main() {
-
 	auto client = cc::Client("localhost", 2000);
 	client.SetTimeout(10s);
 	auto world = client.GetWorld();
@@ -213,8 +217,8 @@ int main() {
 
 	// Load map
 	PointCloudT::Ptr mapCloud (new PointCloudT);
-  	pcl::io::loadPCDFile("../map.pcd", *mapCloud);
-  	cout << "Loaded " << mapCloud->points.size() << " data points from map.pcd" << endl;
+  	pcl::io::loadPCDFile("data/map1.pcd", *mapCloud);
+  	cout << "Loaded " << mapCloud->size() << " data points from map" << endl;
 	renderPointCloud(viewer, mapCloud, "map", Color(0,0,1)); 
 
 	Localizer localizer (world, blueprint_library, ego, mapCloud);
