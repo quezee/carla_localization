@@ -4,6 +4,7 @@
 #include <ctime> 
 #include <cmath>
 #include <thread>
+#include <boost/program_options.hpp>
 
 #include <pcl/filters/voxel_grid.h>
 #include <pcl/registration/icp.h>
@@ -28,6 +29,7 @@ using namespace std;
 using namespace chrono;
 using namespace chrono_literals;
 using namespace string_literals;
+namespace po = boost::program_options;
 namespace csd = carla::sensor::data;
 
 template <class T>
@@ -61,11 +63,14 @@ private:
 	bool ndtReady, imuReady;
 	time_point<system_clock> lastUpdateTime;
 	PointCloudT::Ptr currentCloud, cloudFiltered;
+	cptr<cc::Actor> ego;
 	boost::shared_ptr<cc::Sensor> lidar, imu;
 	pcl::NormalDistributionsTransform<pcl::PointXYZ, pcl::PointXYZ> ndt;
 	pcl::VoxelGrid<PointT> vg;
 	Measurement meas;
 	KalmanFilter kalman;
+
+	// void initGPS
 
 	void initLidar(cc::World& world, cptr<cc::BlueprintLibrary> bpl, cptr<cc::Actor> ego) {
 		auto lidar_bp = *(bpl->Find("sensor.lidar.ray_cast"));
@@ -129,7 +134,8 @@ private:
 public:
 	Localizer(cc::World& world, cptr<cc::BlueprintLibrary> bpl,
 			  cptr<cc::Actor> ego, PointCloudT::Ptr mapCloud)
-		: pose(Point(0,0,0), Rotate(0,0,0))
+		: ego(ego)
+		, pose(Point(0,0,0), Rotate(0,0,0))
 		, currentCloud(new PointCloudT)
 		, cloudFiltered(new PointCloudT)
 		, ndtReady(false), imuReady(false)
@@ -193,11 +199,40 @@ public:
 		lastUpdateTime = system_clock::now();
 		return scanAligned;
 	}
+	~Localizer() {
+		cout << "Destroyed:"
+			 << "\n -ego: " << ego->Destroy()
+			 << "\n -imu: " << imu->Destroy()
+			 << "\n -lidar: " << lidar->Destroy()
+			 << endl;
+	}
 };
 
+po::variables_map parse_arguments(int argc, char *argv[]) {
+	po::options_description desc("Configuration");
+	desc.add_options()
+		("config", po::value<string>()->default_value("config.cfg"), "path to config")
+		("data.map", po::value<string>(), "path to pcl map")
+		("lidar.batchSize", po::value<int>()->default_value(1000))
+	;
+	po::variables_map vm;
+	po::store(po::parse_command_line(argc, argv, desc), vm);
 
+	string cfg_fname {vm["config"].as<string>()}; 
+	ifstream ifs (cfg_fname);
+	if (ifs.fail())
+		throw invalid_argument("Failed to open config file: " + cfg_fname);
 
-int main() {
+	po::store(po::parse_config_file(ifs, desc), vm);
+	po::notify(vm);
+
+	return vm;
+}
+
+int main(int argc, char *argv[]) {
+
+	po::variables_map vm {parse_arguments(argc, argv)};
+	
 	auto client = cc::Client("localhost", 2000);
 	client.SetTimeout(10s);
 	auto world = client.GetWorld();
@@ -217,7 +252,7 @@ int main() {
 
 	// Load map
 	PointCloudT::Ptr mapCloud (new PointCloudT);
-  	pcl::io::loadPCDFile("data/map1.pcd", *mapCloud);
+  	pcl::io::loadPCDFile(vm["data.map"].as<string>(), *mapCloud);
   	cout << "Loaded " << mapCloud->size() << " data points from map" << endl;
 	renderPointCloud(viewer, mapCloud, "map", Color(0,0,1)); 
 
