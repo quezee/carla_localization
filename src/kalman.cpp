@@ -5,28 +5,28 @@ using namespace Eigen;
 KalmanFilter::KalmanFilter(double qx, double qy, double qz, double qh)
     : qx(qx), qy(qy), qz(qz), qh(qh)
 {
-    state << MatrixXd::Zero(8, 1);
+    state.setZero();
 
-    P << MatrixXd::Identity(8, 8);
+    P.setIdentity();
     P(1, 1) = 1000;
     P(3, 3) = 1000;
     P(5, 5) = 1000;
     P(7, 7) = 1000;
 
-    R << MatrixXd::Identity(4, 4);
+    R.setIdentity();
     // R *= 0.1;
 
-    H << MatrixXd::Zero(4, 8);
+    H.setZero();
     H(0, 0) = 1;
     H(1, 2) = 1;
     H(2, 4) = 1;
     H(3, 6) = 1;
 
-    I << MatrixXd::Identity(8, 8);
+    I.setIdentity();
 }
 
 void KalmanFilter::setF(double dt) {
-    F << MatrixXd::Identity(8, 8);
+    F.setIdentity();
     F(0, 1) = dt;
     F(2, 3) = dt;
     F(4, 5) = dt;
@@ -34,7 +34,7 @@ void KalmanFilter::setF(double dt) {
 }
 
 void KalmanFilter::setQ(double dt) {
-    Q << MatrixXd::Zero(8, 8);
+    Q.setZero();
     Q(0, 0) = qx * pow(dt, 3) / 3;
     Q(0, 1) = qx * pow(dt, 2) / 2;
     Q(1, 0) = qx * pow(dt, 2) / 2;
