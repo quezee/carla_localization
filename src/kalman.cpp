@@ -2,26 +2,25 @@
 #include "kalman.h"
 using namespace Eigen;
 
-KalmanFilter::KalmanFilter(double q)
-    : q(q)
+KalmanFilter::KalmanFilter(double qx, double qy, double qz, double qh)
+    : qx(qx), qy(qy), qz(qz), qh(qh)
 {
     state << MatrixXd::Zero(8, 1);
 
     P << MatrixXd::Identity(8, 8);
-    P *= 100;
+    P(1, 1) = 1000;
+    P(3, 3) = 1000;
+    P(5, 5) = 1000;
+    P(7, 7) = 1000;
 
-    R << MatrixXd::Zero(6, 6);
-    R(0, 0) = 0.1;
-    R(2, 2) = 0.1;
-    R(4, 4) = 0.1;
+    R << MatrixXd::Identity(4, 4);
+    // R *= 0.1;
 
-    H << MatrixXd::Zero(6, 8);
+    H << MatrixXd::Zero(4, 8);
     H(0, 0) = 1;
     H(1, 2) = 1;
-    H(2, 3) = 1;
-    H(3, 5) = 1;
-    H(4, 6) = 1;
-    H(5, 7) = 1;
+    H(2, 4) = 1;
+    H(3, 6) = 1;
 
     I << MatrixXd::Identity(8, 8);
 }
@@ -29,16 +28,29 @@ KalmanFilter::KalmanFilter(double q)
 void KalmanFilter::setF(double dt) {
     F << MatrixXd::Identity(8, 8);
     F(0, 1) = dt;
-    F(0, 2) = pow(dt, 2) / 2;
-    F(1, 2) = dt;
-    F(3, 4) = dt;
-    F(3, 5) = pow(dt, 2) / 2;
+    F(2, 3) = dt;
     F(4, 5) = dt;
     F(6, 7) = dt;
 }
 
 void KalmanFilter::setQ(double dt) {
     Q << MatrixXd::Zero(8, 8);
+    Q(0, 0) = qx * pow(dt, 3) / 3;
+    Q(0, 1) = qx * pow(dt, 2) / 2;
+    Q(1, 0) = qx * pow(dt, 2) / 2;
+    Q(1, 1) = qx * dt;
+    Q(2, 2) = qy * pow(dt, 3) / 3;
+    Q(2, 3) = qy * pow(dt, 2) / 2;
+    Q(3, 2) = qy * pow(dt, 2) / 2;
+    Q(3, 3) = qy * dt;
+    Q(4, 4) = qz * pow(dt, 3) / 3;
+    Q(4, 5) = qz * pow(dt, 2) / 2;
+    Q(5, 4) = qz * pow(dt, 2) / 2;
+    Q(5, 5) = qz * dt;
+    Q(6, 6) = qh * pow(dt, 3) / 3;
+    Q(6, 7) = qh * pow(dt, 2) / 2;
+    Q(7, 6) = qh * pow(dt, 2) / 2;
+    Q(7, 7) = qh * dt;
 }
 
 void KalmanFilter::Predict(double dt) {
@@ -52,14 +64,13 @@ void KalmanFilter::Update(const Measurement& meas, double dt) {
     Predict(dt);
     S = H * P * H.transpose() + R;
     K = P * H.transpose() * S.inverse();
-    z << meas.x, meas.ax, meas.y, meas.ay, meas.yaw, meas.v_yaw;
-    cout << z << endl << endl;
+    z << meas.x, meas.y, meas.z, meas.yaw;
     state += K * (z - H * state);
     state(6) = fmod(state(6), 2*M_PI);
     P *= (I - K * H);
 }
 
 Pose KalmanFilter::getPose() const {
-    return {Point(state(0), state(3), 0),
+    return {Point(state(0), state(2), state(4)),
             Rotate(state(6), 0, 0)};
 }

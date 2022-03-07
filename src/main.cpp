@@ -69,7 +69,7 @@ private:
 	float min_pnt_dist;
 	pcl::NormalDistributionsTransform<pcl::PointXYZ, pcl::PointXYZ> ndt;
 	Measurement meas;
-	KalmanFilter kalman;
+	std::optional<KalmanFilter> kalman;
 
 	// void initGPS
 
@@ -110,26 +110,26 @@ private:
 		ndt.setStepSize(step_size);
 		ndt.setMaximumIterations(max_iter);
 	}	
-	void initIMU(cc::World& world, cptr<cc::BlueprintLibrary> bpl, cptr<cc::Actor> ego) {
-		auto imu_bp = *(bpl->Find("sensor.other.imu"));
-		imu_bp.SetAttribute("noise_accel_stddev_x", "0");
-		imu_bp.SetAttribute("noise_accel_stddev_y", "0");
-		imu_bp.SetAttribute("noise_gyro_stddev_z", "0");
-		auto imu_actor = world.SpawnActor(imu_bp,
-										  cg::Transform(cg::Location(-0.5, 0, 1.8)),
-										  ego.get());
-		imu = boost::static_pointer_cast<cc::Sensor>(imu_actor);
-		imu->Listen([this] (auto data) {
-			if (!imuReady) {
-				auto imu_meas = boost::static_pointer_cast<csd::IMUMeasurement>(data);
-				cg::Vector3D accel = imu_meas->GetAccelerometer();
-				meas.ax = accel.x;
-				meas.ay = accel.y;
-				meas.v_yaw = -imu_meas->GetGyroscope().z;
-				imuReady = true;
-			}
-		});
-	}
+	// void initIMU(cc::World& world, cptr<cc::BlueprintLibrary> bpl, cptr<cc::Actor> ego) {
+	// 	auto imu_bp = *(bpl->Find("sensor.other.imu"));
+	// 	imu_bp.SetAttribute("noise_accel_stddev_x", "0");
+	// 	imu_bp.SetAttribute("noise_accel_stddev_y", "0");
+	// 	imu_bp.SetAttribute("noise_gyro_stddev_z", "0");
+	// 	auto imu_actor = world.SpawnActor(imu_bp,
+	// 									  cg::Transform(cg::Location(-0.5, 0, 1.8)),
+	// 									  ego.get());
+	// 	imu = boost::static_pointer_cast<cc::Sensor>(imu_actor);
+	// 	imu->Listen([this] (auto data) {
+	// 		if (!imuReady) {
+	// 			auto imu_meas = boost::static_pointer_cast<csd::IMUMeasurement>(data);
+	// 			cg::Vector3D accel = imu_meas->GetAccelerometer();
+	// 			meas.ax = accel.x;
+	// 			meas.ay = accel.y;
+	// 			meas.v_yaw = -imu_meas->GetGyroscope().z;
+	// 			imuReady = true;
+	// 		}
+	// 	});
+	// }
 public:
 	Localizer(const po::variables_map& vm, cc::World& world,
 			  cptr<cc::BlueprintLibrary> bpl, cptr<cc::Actor> ego,
@@ -141,7 +141,6 @@ public:
 		, cloudFiltered(new PointCloudT)
 		, ndtReady(false), imuReady(false)
 		, lastUpdateTime(system_clock::now())
-		, kalman(0)
 	{
 		initLidar(world, bpl, ego,
 				  vm["lidar.rot_frq"].as<string>(),
@@ -151,16 +150,22 @@ public:
 				vm["ndt.resolution"].as<float>(),
 				vm["ndt.step_size"].as<float>(),
 				vm["ndt.max_iter"].as<size_t>());
-		initIMU(world, bpl, ego);
+		// initIMU(world, bpl, ego);
+		if (vm["kalman.use"].as<bool>())
+			kalman = KalmanFilter(vm["kalman.qx"].as<double>(),
+								  vm["kalman.qy"].as<double>(),
+								  vm["kalman.qz"].as<double>(),
+								  vm["kalman.qh"].as<double>());
 	}
 	bool MeasurementIsReady() const {
-		return ndtReady && imuReady;
+		// return ndtReady && imuReady;
+		return ndtReady;
 	}
 	const Pose& GetPose() const {
 		return pose;
 	}
-	pair<Eigen::Matrix4f, PointCloudT::Ptr> NDT(const Pose& startingPose) {
-		Eigen::Matrix4f startingTrans = getTransform(startingPose);
+	pair<Eigen::Matrix4f, PointCloudT::Ptr> NDT() {
+		Eigen::Matrix4f startingTrans = getTransform(pose);
 
 		PointCloudT::Ptr aligned (new PointCloudT);
 		ndt.align(*aligned, startingTrans);
@@ -173,31 +178,29 @@ public:
 		return {transform, aligned};
 	}
 	const std::shared_ptr<PointCloudT> Localize() {
-		// Filter scan using voxel filter
-		// cout << "Filtered cloud size: " << cloudFiltered->size() << endl;
-		// cout << "Scan cloud size: " << scanCloud->size() << endl;
-
 		// Find pose transform by using NDT matching
-		auto [transform, scanAligned] = NDT(pose);
+		auto [transform, scanAligned] = NDT();
 		pose = getPose(transform);
 
-		// Fulfill measurement
-		// meas.x = pose.position.x;
-		// meas.y = pose.position.y;
-		// meas.yaw = pose.rotation.yaw;
+		if (kalman.has_value()) {
+			// Fulfill measurement
+			meas.x = pose.position.x;
+			meas.y = pose.position.y;
+			meas.z = pose.position.z;
+			meas.yaw = pose.rotation.yaw;
 
-		// Update timedelta
-		// auto dt = duration_cast<milliseconds>(
-		// 	system_clock::now() - lastUpdateTime
-		// );
-		// double dt_sec = (double)dt.count() / 1000;
+			// Update timedelta
+			auto dt = duration_cast<milliseconds>(
+				system_clock::now() - lastUpdateTime
+			);
+			double dt_sec = (double)dt.count() / 1000;
 
-		// Get updated KF state
-		// kalman.Update(meas, dt_sec);
-		// pose = kalman.getPose();
-
+			// Get updated KF state
+			kalman.value().Update(meas, dt_sec);
+			pose = kalman.value().getPose();
+			transform = getTransform(pose);
+		}
 		// Transform scan so it aligns with ego's actual pose and render the scan
-		transform = getTransform(pose);
 		pcl::transformPointCloud(*currentCloud, *scanAligned, transform);
 		ndtReady = false;
 		imuReady = false;
@@ -206,9 +209,9 @@ public:
 	}
 	~Localizer() {
 		cout << "Destroyed:"
-			 << "\n -ego: " << ego->Destroy()
+			 << "\n -lidar: " << lidar->Destroy()		
 			 << "\n -imu: " << imu->Destroy()
-			 << "\n -lidar: " << lidar->Destroy()
+			 << "\n -ego: " << ego->Destroy()
 			 << endl;
 	}
 };
@@ -228,6 +231,12 @@ po::variables_map parse_config(int argc, char *argv[]) {
 		("ndt.resolution", po::value<float>()->required(), "voxel grid resolution")
 		("ndt.step_size", po::value<float>()->required(), "newton line search max step")
 		("ndt.max_iter", po::value<size_t>()->required(), "newton max iterations")
+
+		("kalman.use", po::value<bool>()->required(), "whether to use kalman filter")
+		("kalman.qx", po::value<double>()->required(), "process noise variance for x coord.")
+		("kalman.qy", po::value<double>()->required(), "process noise variance for y coord.")
+		("kalman.qz", po::value<double>()->required(), "process noise variance for z coord.")
+		("kalman.qh", po::value<double>()->required(), "process noise variance for heading")
 	;
 	po::variables_map vm;
 	po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -274,6 +283,8 @@ int main(int argc, char *argv[]) {
 
 	Pose poseRef = getTruePose(vehicle);
 	double maxError = 0;
+	double meanError = 0;
+	size_t n_steps = 0;
   
 	while (!viewer->wasStopped())
   	{
@@ -316,14 +327,18 @@ int main(int argc, char *argv[]) {
           
 		  	double poseError = std::hypot(truePose.position.x - pose.position.x,
 										  truePose.position.y - pose.position.y);
+			n_steps++;
 			maxError = max(maxError, poseError);
+			meanError = meanError + ((poseError - meanError) / n_steps);
 			double distDriven = sqrt( pow(truePose.position.x, 2) + pow(truePose.position.y, 2) );
+			viewer->removeShape("meanE");
+			viewer->addText("Mean Error: "+to_string(meanError)+" m", 200, 100, 32, 1.0, 1.0, 1.0, "meanE",0);
 			viewer->removeShape("maxE");
-			viewer->addText("Max Error: "+to_string(maxError)+" m", 200, 100, 32, 1.0, 1.0, 1.0, "maxE",0);
+			viewer->addText("Max Error: "+to_string(maxError)+" m", 200, 150, 32, 1.0, 1.0, 1.0, "maxE",0);
 			viewer->removeShape("derror");
-			viewer->addText("Pose error: "+to_string(poseError)+" m", 200, 150, 32, 1.0, 1.0, 1.0, "derror",0);
+			viewer->addText("Pose error: "+to_string(poseError)+" m", 200, 200, 32, 1.0, 1.0, 1.0, "derror",0);
 			viewer->removeShape("dist");
-			viewer->addText("Distance: "+to_string(distDriven)+" m", 200, 200, 32, 1.0, 1.0, 1.0, "dist",0);
+			viewer->addText("Distance: "+to_string(distDriven)+" m", 200, 250, 32, 1.0, 1.0, 1.0, "dist",0);
 
 			if (maxError > 1.2 || distDriven >= 170.0)
 				viewer->removeShape("eval");
