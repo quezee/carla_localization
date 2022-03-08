@@ -3,9 +3,16 @@
 using namespace Eigen;
 
 KalmanFilter::KalmanFilter(double var_x, double var_y, double var_yaw,
-                           double std_vdd, double std_ydd)
-    : var_x(var_x), var_y(var_y), var_yaw(var_yaw), std_vdd(std_vdd), std_ydd(std_ydd)
+                           double std_pdd, double std_ydd)
+    : var_x(var_x), var_y(var_y), var_yaw(var_yaw)
+    , var_pdd(pow(std_pdd, 2)), var_ydd(pow(std_ydd, 2))
 {
+    x.setZero();
+
+    P.setIdentity();
+    P(2, 2) = 1000;
+    P(4, 4) = 1000;
+
     H.setZero();
     H(0, 0) = 1;
     H(1, 1) = 1;
@@ -21,15 +28,18 @@ void KalmanFilter::CalculateSigmaPoints() {
     // set augmented mean vector
     x_aug.setZero();
     x_aug.topRows(5) = x;
+    cout << "x_aug\n" << x_aug << endl << endl;
 
     // set augmented state covariance
     P_aug.setZero();
     P_aug.topLeftCorner(5, 5) = P;
-    P_aug(5, 5) = pow(std_vdd, 2);
-    P_aug(6, 6) = pow(std_ydd, 2);
+    P_aug(5, 5) = var_pdd;
+    P_aug(6, 6) = var_ydd;
+    cout << "P_aug\n" << P_aug << endl << endl;
 
     // calculate square root of P_aug
     L = P_aug.llt().matrixL();
+    cout << "L\n" << L << endl << endl;
 
     // calculate augmented sigma points
     Xsig_aug.col(0) = x_aug;
@@ -74,7 +84,6 @@ void KalmanFilter::PredictMeanAndCovariance() {
     x = Xsig_pred * weights;
 
     // calculate predicted covariance matrix
-    P.setZero();
     VectorXd x_i (n_x);
     for (int i = 0; i < weights.rows(); ++i) {
         x_i = Xsig_pred.col(i) - x;
@@ -89,9 +98,15 @@ void KalmanFilter::StateToMeasurement() {
 
 void KalmanFilter::Update(const Measurement& meas, double delta_t) {
     CalculateSigmaPoints();
+    // cout << "Xsig_aug\n" << Xsig_aug << endl << endl;
     PredictSigmaPoints(delta_t);
+    // cout << "Xsig_pred\n" << Xsig_pred << endl << endl;
     PredictMeanAndCovariance();
+    // cout << "x\n" << x << endl << endl;
+    // cout << "P\n" << P << endl << endl;
     StateToMeasurement();
+    // cout << "z_pred\n" << z_pred << endl << endl;
+    // cout << "S\n" << S << endl << endl;
     z << meas.x, meas.y, meas.yaw;
     K = P * H.transpose() * S.inverse();
     x += K * (z - z_pred);

@@ -155,7 +155,7 @@ public:
 			kalman = KalmanFilter(vm["kalman.var_x"].as<double>(),
 								  vm["kalman.var_y"].as<double>(),
 								  vm["kalman.var_yaw"].as<double>(),
-								  vm["kalman.std_vdd"].as<double>(),
+								  vm["kalman.std_pdd"].as<double>(),
 								  vm["kalman.std_ydd"].as<double>());
 	}
 	bool MeasurementIsReady() const {
@@ -236,7 +236,7 @@ po::variables_map parse_config(int argc, char *argv[]) {
 		("kalman.var_x", po::value<double>()->required())
 		("kalman.var_y", po::value<double>()->required())
 		("kalman.var_yaw", po::value<double>()->required())
-		("kalman.std_vdd", po::value<double>()->required(), "process noise std for acceleration")
+		("kalman.std_pdd", po::value<double>()->required(), "process noise std for pos. acceleration")
 		("kalman.std_ydd", po::value<double>()->required(), "process noise std for yaw acceleration")
 	;
 	po::variables_map vm;

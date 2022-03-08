@@ -30,7 +30,7 @@ private:
     Matrix<double, 3, 5> H;         // state to measurement transform
     Matrix<double, 5, 3> K;         // Kalman gain
     Matrix<double, 5, 5> I;         // identity
-    double std_vdd, std_ydd;        // process noise std
+    double var_pdd, var_ydd;        // process noise var.
     double var_x, var_y, var_yaw;   // measurement noise var.
     void CalculateSigmaPoints();
     void PredictSigmaPoints(double delta_t);
@@ -38,7 +38,7 @@ private:
     void StateToMeasurement();
 public:
     KalmanFilter(double var_x, double var_y, double var_yaw,
-                 double std_vdd, double std_ydd);
+                 double std_pdd, double std_ydd);
     void Update(const Measurement& meas, double delta_t);
     Pose getPose() const;
 };
