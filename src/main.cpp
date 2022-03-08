@@ -152,10 +152,11 @@ public:
 				vm["ndt.max_iter"].as<size_t>());
 		// initIMU(world, bpl, ego);
 		if (vm["kalman.use"].as<bool>())
-			kalman = KalmanFilter(vm["kalman.qx"].as<double>(),
-								  vm["kalman.qy"].as<double>(),
-								  vm["kalman.qz"].as<double>(),
-								  vm["kalman.qh"].as<double>());
+			kalman = KalmanFilter(vm["kalman.var_x"].as<double>(),
+								  vm["kalman.var_y"].as<double>(),
+								  vm["kalman.var_yaw"].as<double>(),
+								  vm["kalman.std_vdd"].as<double>(),
+								  vm["kalman.std_ydd"].as<double>());
 	}
 	bool MeasurementIsReady() const {
 		// return ndtReady && imuReady;
@@ -186,7 +187,6 @@ public:
 			// Fulfill measurement
 			meas.x = pose.position.x;
 			meas.y = pose.position.y;
-			meas.z = pose.position.z;
 			meas.yaw = pose.rotation.yaw;
 
 			// Update timedelta
@@ -233,10 +233,11 @@ po::variables_map parse_config(int argc, char *argv[]) {
 		("ndt.max_iter", po::value<size_t>()->required(), "newton max iterations")
 
 		("kalman.use", po::value<bool>()->required(), "whether to use kalman filter")
-		("kalman.qx", po::value<double>()->required(), "process noise variance for x coord.")
-		("kalman.qy", po::value<double>()->required(), "process noise variance for y coord.")
-		("kalman.qz", po::value<double>()->required(), "process noise variance for z coord.")
-		("kalman.qh", po::value<double>()->required(), "process noise variance for heading")
+		("kalman.var_x", po::value<double>()->required())
+		("kalman.var_y", po::value<double>()->required())
+		("kalman.var_yaw", po::value<double>()->required())
+		("kalman.std_vdd", po::value<double>()->required(), "process noise std for acceleration")
+		("kalman.std_ydd", po::value<double>()->required(), "process noise std for yaw acceleration")
 	;
 	po::variables_map vm;
 	po::store(po::parse_command_line(argc, argv, desc), vm);
