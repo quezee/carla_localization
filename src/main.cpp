@@ -125,7 +125,7 @@ private:
 				// cg::Vector3D accel = imu_meas->GetAccelerometer();
 				// meas.ax = accel.x;
 				// meas.ay = accel.y;
-				meas.yawd = imu_meas->GetGyroscope().z;
+				meas.w = imu_meas->GetGyroscope().z;
 				imuReady = true;
 			}
 		});
@@ -155,9 +155,9 @@ public:
 			kalman = KalmanFilter(vm["kalman.var_x"].as<double>(),
 								  vm["kalman.var_y"].as<double>(),
 								  vm["kalman.var_yaw"].as<double>(),
-								  vm["kalman.var_yawd"].as<double>(),
-								  vm["kalman.std_ldd"].as<double>(),
-								  vm["kalman.std_ydd"].as<double>());
+								  vm["kalman.var_w"].as<double>(),
+								  vm["kalman.std_a"].as<double>(),
+								  vm["kalman.std_wd"].as<double>());
 	}
 	bool MeasurementIsReady() const {
 		return ndtReady && imuReady;
@@ -236,9 +236,9 @@ po::variables_map parse_config(int argc, char *argv[]) {
 		("kalman.var_x", po::value<double>()->required())
 		("kalman.var_y", po::value<double>()->required())
 		("kalman.var_yaw", po::value<double>()->required())
-		("kalman.var_yawd", po::value<double>()->required())
-		("kalman.std_ldd", po::value<double>()->required(), "process noise std for linear acceleration")
-		("kalman.std_ydd", po::value<double>()->required(), "process noise std for yaw acceleration")
+		("kalman.var_w", po::value<double>()->required())
+		("kalman.std_a", po::value<double>()->required(), "process noise std for linear acceleration")
+		("kalman.std_wd", po::value<double>()->required(), "process noise std for yaw acceleration")
 	;
 	po::variables_map vm;
 	po::store(po::parse_command_line(argc, argv, desc), vm);

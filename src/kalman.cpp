@@ -2,10 +2,10 @@
 #include "kalman.h"
 using namespace Eigen;
 
-KalmanFilter::KalmanFilter(double var_x, double var_y, double var_yaw, double var_yawd,
-                           double std_ldd, double std_ydd)
-    : var_x(var_x), var_y(var_y), var_yaw(var_yaw), var_yawd(var_yawd)
-    , var_ldd(pow(std_ldd, 2)), var_ydd(pow(std_ydd, 2))
+KalmanFilter::KalmanFilter(double var_x, double var_y, double var_yaw, double var_w,
+                           double std_a, double std_wd)
+    : var_x(var_x), var_y(var_y), var_yaw(var_yaw), var_w(var_w)
+    , var_a(pow(std_a, 2)), var_wd(pow(std_wd, 2))
 {
     x.setZero();
 
@@ -20,7 +20,7 @@ KalmanFilter::KalmanFilter(double var_x, double var_y, double var_yaw, double va
     H(3, 4) = 1;
 
     R.setZero();
-    R.diagonal() << var_x, var_y, var_yaw, var_yawd;
+    R.diagonal() << var_x, var_y, var_yaw, var_w;
 
     I.setIdentity();
 }
@@ -33,8 +33,8 @@ void KalmanFilter::CalculateSigmaPoints() {
     // set augmented state covariance
     P_aug.setZero();
     P_aug.topLeftCorner(5, 5) = P;
-    P_aug(5, 5) = var_ldd;
-    P_aug(6, 6) = var_ydd;
+    P_aug(5, 5) = var_a;
+    P_aug(6, 6) = var_wd;
 
     // calculate square root of P_aug
     L = P_aug.llt().matrixL();
@@ -121,7 +121,7 @@ void KalmanFilter::Update(const Measurement& meas, double delta_t) {
     }
     
     K = T * S.inverse();
-    z << meas.x, meas.y, meas.yaw, meas.yawd;
+    z << meas.x, meas.y, meas.yaw, meas.w;
     x += K * (z - z_pred);
     x(3) = fmod(x(3), 2*M_PI);
     P -= K * S * K.transpose();    
