@@ -2,24 +2,25 @@
 #include "kalman.h"
 using namespace Eigen;
 
-KalmanFilter::KalmanFilter(double var_x, double var_y, double var_yaw,
+KalmanFilter::KalmanFilter(double var_x, double var_y, double var_yaw, double var_yawd,
                            double std_ldd, double std_ydd)
-    : var_x(var_x), var_y(var_y), var_yaw(var_yaw)
+    : var_x(var_x), var_y(var_y), var_yaw(var_yaw), var_yawd(var_yawd)
     , var_ldd(pow(std_ldd, 2)), var_ydd(pow(std_ydd, 2))
 {
     x.setZero();
 
     P.setIdentity();
+    P *= 0.01;
     // P(2, 2) = 1000;
-    // P(4, 4) = 1000;
 
     H.setZero();
     H(0, 0) = 1;
     H(1, 1) = 1;
     H(2, 3) = 1;
+    H(3, 4) = 1;
 
     R.setZero();
-    R.diagonal() << var_x, var_y, var_yaw;
+    R.diagonal() << var_x, var_y, var_yaw, var_yawd;
 
     I.setIdentity();
 }
@@ -120,7 +121,7 @@ void KalmanFilter::Update(const Measurement& meas, double delta_t) {
     }
     
     K = T * S.inverse();
-    z << meas.x, meas.y, meas.yaw;
+    z << meas.x, meas.y, meas.yaw, meas.yawd;
     x += K * (z - z_pred);
     x(3) = fmod(x(3), 2*M_PI);
     P -= K * S * K.transpose();    

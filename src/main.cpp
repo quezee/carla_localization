@@ -110,26 +110,26 @@ private:
 		ndt.setStepSize(step_size);
 		ndt.setMaximumIterations(max_iter);
 	}	
-	// void initIMU(cc::World& world, cptr<cc::BlueprintLibrary> bpl, cptr<cc::Actor> ego) {
-	// 	auto imu_bp = *(bpl->Find("sensor.other.imu"));
-	// 	imu_bp.SetAttribute("noise_accel_stddev_x", "0");
-	// 	imu_bp.SetAttribute("noise_accel_stddev_y", "0");
-	// 	imu_bp.SetAttribute("noise_gyro_stddev_z", "0");
-	// 	auto imu_actor = world.SpawnActor(imu_bp,
-	// 									  cg::Transform(cg::Location(-0.5, 0, 1.8)),
-	// 									  ego.get());
-	// 	imu = boost::static_pointer_cast<cc::Sensor>(imu_actor);
-	// 	imu->Listen([this] (auto data) {
-	// 		if (!imuReady) {
-	// 			auto imu_meas = boost::static_pointer_cast<csd::IMUMeasurement>(data);
-	// 			cg::Vector3D accel = imu_meas->GetAccelerometer();
-	// 			meas.ax = accel.x;
-	// 			meas.ay = accel.y;
-	// 			meas.v_yaw = -imu_meas->GetGyroscope().z;
-	// 			imuReady = true;
-	// 		}
-	// 	});
-	// }
+	void initIMU(cc::World& world, cptr<cc::BlueprintLibrary> bpl, cptr<cc::Actor> ego) {
+		auto imu_bp = *(bpl->Find("sensor.other.imu"));
+		imu_bp.SetAttribute("noise_accel_stddev_x", "0");
+		imu_bp.SetAttribute("noise_accel_stddev_y", "0");
+		imu_bp.SetAttribute("noise_gyro_stddev_z", "0");
+		auto imu_actor = world.SpawnActor(imu_bp,
+										  cg::Transform(cg::Location(-0.5, 0, 1.8)),
+										  ego.get());
+		imu = boost::static_pointer_cast<cc::Sensor>(imu_actor);
+		imu->Listen([this] (auto data) {
+			if (!imuReady) {
+				auto imu_meas = boost::static_pointer_cast<csd::IMUMeasurement>(data);
+				// cg::Vector3D accel = imu_meas->GetAccelerometer();
+				// meas.ax = accel.x;
+				// meas.ay = accel.y;
+				meas.yawd = imu_meas->GetGyroscope().z;
+				imuReady = true;
+			}
+		});
+	}
 public:
 	Localizer(const po::variables_map& vm, cc::World& world,
 			  cptr<cc::BlueprintLibrary> bpl, cptr<cc::Actor> ego,
@@ -150,17 +150,17 @@ public:
 				vm["ndt.resolution"].as<float>(),
 				vm["ndt.step_size"].as<float>(),
 				vm["ndt.max_iter"].as<size_t>());
-		// initIMU(world, bpl, ego);
+		initIMU(world, bpl, ego);
 		if (vm["kalman.use"].as<bool>())
 			kalman = KalmanFilter(vm["kalman.var_x"].as<double>(),
 								  vm["kalman.var_y"].as<double>(),
 								  vm["kalman.var_yaw"].as<double>(),
+								  vm["kalman.var_yawd"].as<double>(),
 								  vm["kalman.std_ldd"].as<double>(),
 								  vm["kalman.std_ydd"].as<double>());
 	}
 	bool MeasurementIsReady() const {
-		// return ndtReady && imuReady;
-		return ndtReady;
+		return ndtReady && imuReady;
 	}
 	const Pose& GetPose() const {
 		return pose;
@@ -236,6 +236,7 @@ po::variables_map parse_config(int argc, char *argv[]) {
 		("kalman.var_x", po::value<double>()->required())
 		("kalman.var_y", po::value<double>()->required())
 		("kalman.var_yaw", po::value<double>()->required())
+		("kalman.var_yawd", po::value<double>()->required())
 		("kalman.std_ldd", po::value<double>()->required(), "process noise std for linear acceleration")
 		("kalman.std_ydd", po::value<double>()->required(), "process noise std for yaw acceleration")
 	;
