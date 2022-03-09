@@ -90,7 +90,7 @@ private:
 			if (!ndtReady) {
 				auto scan = boost::static_pointer_cast<csd::LidarMeasurement>(data);
 				for (auto detection : *scan) {
-					if (std::sqrt(std::hypot(detection.point.x, detection.point.y, detection.point.z)) > min_pnt_dist)
+					if (std::hypot(detection.point.x, detection.point.y, detection.point.z) > min_pnt_dist)
 						pclCloud.points.push_back(PointT(detection.point.x, detection.point.y, detection.point.z));
 				}
 				if (pclCloud.size() >= batch_size) {
@@ -122,9 +122,6 @@ private:
 		imu->Listen([this] (auto data) {
 			if (!imuReady) {
 				auto imu_meas = boost::static_pointer_cast<csd::IMUMeasurement>(data);
-				// cg::Vector3D accel = imu_meas->GetAccelerometer();
-				// meas.ax = accel.x;
-				// meas.ay = accel.y;
 				meas.w = imu_meas->GetGyroscope().z;
 				imuReady = true;
 			}

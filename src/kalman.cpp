@@ -10,8 +10,6 @@ KalmanFilter::KalmanFilter(double var_x, double var_y, double var_yaw, double va
     x.setZero();
 
     P.setIdentity();
-    P *= 0.01;
-    // P(2, 2) = 1000;
 
     H.setZero();
     H(0, 0) = 1;
@@ -47,29 +45,33 @@ void KalmanFilter::CalculateSigmaPoints() {
     }  
 }
 
-void KalmanFilter::PredictSigmaPoints(double delta_t) {
+void KalmanFilter::PredictSigmaPoints(double dt) {
     for (int i = 0; i < Xsig_pred.cols(); i++) {
-        const VectorXd& xi = Xsig_aug.col(i);  
-        VectorXd p(5);
-        if (!xi(4))
-            p << xi(2) * cos(xi(3)) * delta_t,
-                 xi(2) * sin(xi(3)) * delta_t,
-                 0, 0, 0;
-        else
-            p << (xi(2)/xi(4)) * (sin(xi(3) + xi(4)*delta_t) - sin(xi(3))),
-                 (xi(2)/xi(4)) * (-cos(xi(3) + xi(4)*delta_t) + cos(xi(3))),
-                 0,
-                 xi(4) * delta_t,
-                 0;
-        double ql = Xsig_aug(5, i);
-        double qy = Xsig_aug(6, i);
-        VectorXd q(5);
-        q << (pow(delta_t, 2)/2) * cos(xi(3)) * ql,
-             (pow(delta_t, 2)/2) * sin(xi(3)) * ql,
-             delta_t * ql,
-             qy * pow(delta_t, 2) / 2,
-             qy * delta_t;
-        Xsig_pred.col(i) = xi.topRows(5) + p + q;
+        double px  = Xsig_aug(0, i);
+        double py  = Xsig_aug(1, i);
+        double v   = Xsig_aug(2, i);
+        double yaw = Xsig_aug(3, i);
+        double w   = Xsig_aug(4, i);
+        double d_px, d_py;        
+        if (!w) {
+            d_px = v * cos(yaw) * dt;
+            d_py = v * sin(yaw) * dt;
+        } else {
+            d_px = (v/w) * (sin(yaw + w*dt) - sin(yaw));
+            d_py = (v/w) * (-cos(yaw + w*dt) + cos(yaw));
+        }
+        VectorXd p(n_x);
+        p << d_px, d_py, 0, w*dt, 0;
+
+        double q_a  = Xsig_aug(5, i);
+        double q_wd = Xsig_aug(6, i);
+        VectorXd q(n_x);
+        q << cos(yaw) * q_a * pow(dt, 2) / 2,
+             sin(yaw) * q_a * pow(dt, 2) / 2,
+             q_a * dt,
+             q_wd * pow(dt, 2) / 2,
+             q_wd * dt;
+        Xsig_pred.col(i) = Xsig_aug.col(i).topRows(n_x) + p + q;
     }
 }
 
@@ -99,14 +101,14 @@ void KalmanFilter::PredictMeasurement() {
     S = R;
     VectorXd z_diff (n_z);
     for (int i = 0; i < weights.rows(); ++i) {
-        z_diff = Zsig_pred.col(i) - z;
+        z_diff = Zsig_pred.col(i) - z_pred;
         S += weights(i) * z_diff * z_diff.transpose();
     }
 }
 
-void KalmanFilter::Update(const Measurement& meas, double delta_t) {
+void KalmanFilter::Update(const Measurement& meas, double dt) {
     CalculateSigmaPoints();
-    PredictSigmaPoints(delta_t);
+    PredictSigmaPoints(dt);
     PredictMeanAndCovariance();
     PredictMeasurement();
 
@@ -116,7 +118,7 @@ void KalmanFilter::Update(const Measurement& meas, double delta_t) {
     VectorXd z_diff (n_z);
     for (int i = 0; i < weights.rows(); ++i) {
         x_diff = Xsig_pred.col(i) - x;
-        z_diff = Zsig_pred.col(i) - z;
+        z_diff = Zsig_pred.col(i) - z_pred;
         T += weights(i) * x_diff * z_diff.transpose();
     }
     
