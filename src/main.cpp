@@ -3,6 +3,7 @@
 #include <chrono> 
 #include <ctime> 
 #include <cmath>
+#include <random>
 #include <thread>
 #include <boost/program_options.hpp>
 
@@ -57,6 +58,22 @@ void keyboardEventOccurred(const pcl::visualization::KeyboardEvent &event, void*
 		refresh_view = true;
 }
 
+class Speedometer {
+private:
+	cptr<cc::Actor> ego;
+    mutable std::default_random_engine gen;
+	mutable std::normal_distribution<double> noise;
+public:
+	Speedometer(cptr<cc::Actor> ego, double std)
+		: ego(ego), noise(0, std)
+	{}
+	double GetMeasure() const {
+		cg::Vector3D v_vec = ego->GetVelocity();
+		double v = std::hypot(v_vec.x, v_vec.y);
+		return v + noise(gen);
+	}
+};
+
 class Localizer {
 private:
 	Pose pose;
@@ -65,13 +82,12 @@ private:
 	PointCloudT::Ptr currentCloud, cloudFiltered;
 	cptr<cc::Actor> ego;
 	boost::shared_ptr<cc::Sensor> lidar, imu;
+	Speedometer speedometer;
 	size_t batch_size;
 	float min_pnt_dist;
 	pcl::NormalDistributionsTransform<pcl::PointXYZ, pcl::PointXYZ> ndt;
 	Measurement meas;
 	std::optional<KalmanFilter> kalman;
-
-	// void initGPS
 
 	void initLidar(cc::World& world, cptr<cc::BlueprintLibrary> bpl, cptr<cc::Actor> ego,
 				   const string& rot_frq, const string& pts_per_sec) {
@@ -122,11 +138,14 @@ private:
 		imu->Listen([this] (auto data) {
 			if (!imuReady) {
 				auto imu_meas = boost::static_pointer_cast<csd::IMUMeasurement>(data);
+				cg::Vector3D accel = imu_meas->GetAccelerometer();
+				meas.a = std::hypot(accel.x, accel.y);
 				meas.w = imu_meas->GetGyroscope().z;
 				imuReady = true;
 			}
 		});
 	}
+
 public:
 	Localizer(const po::variables_map& vm, cc::World& world,
 			  cptr<cc::BlueprintLibrary> bpl, cptr<cc::Actor> ego,
@@ -134,6 +153,7 @@ public:
 		: ego(ego)
 		, batch_size(vm["lidar.batch_size"].as<size_t>())
 		, min_pnt_dist(vm["lidar.min_pnt_dist"].as<float>())
+		, speedometer(ego, vm["speed.std"].as<double>())
 		, currentCloud(new PointCloudT)
 		, cloudFiltered(new PointCloudT)
 		, ndtReady(false), imuReady(false)
@@ -151,9 +171,11 @@ public:
 		if (vm["kalman.use"].as<bool>())
 			kalman = KalmanFilter(vm["kalman.var_x"].as<double>(),
 								  vm["kalman.var_y"].as<double>(),
+								  vm["kalman.var_v"].as<double>(),
+								  vm["kalman.var_a"].as<double>(),
 								  vm["kalman.var_yaw"].as<double>(),
 								  vm["kalman.var_w"].as<double>(),
-								  vm["kalman.std_a"].as<double>(),
+								  vm["kalman.std_j"].as<double>(),
 								  vm["kalman.std_wd"].as<double>());
 	}
 	bool MeasurementIsReady() const {
@@ -184,6 +206,7 @@ public:
 			// Fulfill measurement
 			meas.x = pose.position.x;
 			meas.y = pose.position.y;
+			meas.v = speedometer.GetMeasure();
 			meas.yaw = pose.rotation.yaw;
 
 			// Update timedelta
@@ -230,12 +253,16 @@ po::variables_map parse_config(int argc, char *argv[]) {
 		("ndt.step_size", po::value<float>()->required(), "newton line search max step")
 		("ndt.max_iter", po::value<size_t>()->required(), "newton max iterations")
 
+		("speed.std", po::value<double>()->required(), "speedometer noise std")
+
 		("kalman.use", po::value<bool>()->required(), "whether to use kalman filter")
 		("kalman.var_x", po::value<double>()->required())
 		("kalman.var_y", po::value<double>()->required())
+		("kalman.var_v", po::value<double>()->required())
+		("kalman.var_a", po::value<double>()->required())
 		("kalman.var_yaw", po::value<double>()->required())
 		("kalman.var_w", po::value<double>()->required())
-		("kalman.std_a", po::value<double>()->required(), "process noise std for linear acceleration")
+		("kalman.std_j", po::value<double>()->required(), "process noise std for linear jerk")
 		("kalman.std_wd", po::value<double>()->required(), "process noise std for yaw acceleration")
 	;
 	po::variables_map vm;
