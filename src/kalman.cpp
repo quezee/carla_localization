@@ -2,23 +2,17 @@
 #include "kalman.h"
 using namespace Eigen;
 
-KalmanFilter::KalmanFilter(double var_x, double var_y, double var_yaw, double var_w,
-                           double std_a, double std_wd)
-    : var_x(var_x), var_y(var_y), var_yaw(var_yaw), var_w(var_w)
-    , var_a(pow(std_a, 2)), var_wd(pow(std_wd, 2))
+KalmanFilter::KalmanFilter(double var_x, double var_y, double var_v, double var_a,
+                           double var_yaw, double var_w, double std_j, double std_wd)
+    : var_x(var_x), var_y(var_y), var_v(var_v), var_a(var_a), var_yaw(var_yaw)
+    , var_w(var_w), var_j(pow(std_j, 2)), var_wd(pow(std_wd, 2))
 {
     x.setZero();
-
     P.setIdentity();
-
-    H.setZero();
-    H(0, 0) = 1;
-    H(1, 1) = 1;
-    H(2, 3) = 1;
-    H(3, 4) = 1;
+    H.setIdentity();
 
     R.setZero();
-    R.diagonal() << var_x, var_y, var_yaw, var_w;
+    R.diagonal() << var_x, var_y, var_v, var_a, var_yaw, var_w;
 
     I.setIdentity();
 }
@@ -26,13 +20,13 @@ KalmanFilter::KalmanFilter(double var_x, double var_y, double var_yaw, double va
 void KalmanFilter::CalculateSigmaPoints() {
     // set augmented mean vector
     x_aug.setZero();
-    x_aug.topRows(5) = x;
+    x_aug.topRows(6) = x;
 
     // set augmented state covariance
     P_aug.setZero();
-    P_aug.topLeftCorner(5, 5) = P;
-    P_aug(5, 5) = var_a;
-    P_aug(6, 6) = var_wd;
+    P_aug.topLeftCorner(6, 6) = P;
+    P_aug(6, 6) = var_j;
+    P_aug(7, 7) = var_wd;
 
     // calculate square root of P_aug
     L = P_aug.llt().matrixL();
@@ -50,25 +44,29 @@ void KalmanFilter::PredictSigmaPoints(double dt) {
         double px  = Xsig_aug(0, i);
         double py  = Xsig_aug(1, i);
         double v   = Xsig_aug(2, i);
-        double yaw = Xsig_aug(3, i);
-        double w   = Xsig_aug(4, i);
-        double d_px, d_py;        
+        double a   = Xsig_aug(3, i);
+        double yaw = Xsig_aug(4, i);
+        double w   = Xsig_aug(5, i);
+        double d_px, d_py;
         if (!w) {
-            d_px = v * cos(yaw) * dt;
-            d_py = v * sin(yaw) * dt;
+            d_px = ((a*dt/2) + v) * cos(yaw) * dt;
+            d_py = ((a*dt/2) + v) * sin(yaw) * dt;
         } else {
-            d_px = (v/w) * (sin(yaw + w*dt) - sin(yaw));
-            d_py = (v/w) * (-cos(yaw + w*dt) + cos(yaw));
+            d_px = ((v + a*dt) * sin(yaw + w*dt) - v*sin(yaw)) / w;
+            d_px += a * (cos(yaw + w*dt) - cos(yaw)) / pow(w, 2);
+            d_py = ((v + a*dt) * -cos(yaw + w*dt) + v*cos(yaw)) / w;
+            d_py += a * (sin(yaw + w*dt) - sin(yaw)) / pow(w, 2);
         }
         VectorXd p(n_x);
-        p << d_px, d_py, 0, w*dt, 0;
+        p << d_px, d_py, a*dt, 0, w*dt, 0;
 
-        double q_a  = Xsig_aug(5, i);
-        double q_wd = Xsig_aug(6, i);
+        double q_j  = Xsig_aug(6, i);
+        double q_wd = Xsig_aug(7, i);
         VectorXd q(n_x);
-        q << cos(yaw) * q_a * pow(dt, 2) / 2,
-             sin(yaw) * q_a * pow(dt, 2) / 2,
-             q_a * dt,
+        q << cos(yaw) * q_j * pow(dt, 3) / 6,
+             sin(yaw) * q_j * pow(dt, 3) / 6,
+             q_j * pow(dt, 2) / 2,
+             q_j * dt,
              q_wd * pow(dt, 2) / 2,
              q_wd * dt;
         Xsig_pred.col(i) = Xsig_aug.col(i).topRows(n_x) + p + q;
@@ -123,14 +121,13 @@ void KalmanFilter::Update(const Measurement& meas, double dt) {
     }
     
     K = T * S.inverse();
-    z << meas.x, meas.y, meas.yaw, meas.w;
+    z << meas.x, meas.y, meas.v, meas.a, meas.yaw, meas.w;
     x += K * (z - z_pred);
-    x(3) = fmod(x(3), 2*M_PI);
+    x(4) = fmod(x(4), 2*M_PI);
     P -= K * S * K.transpose();    
 }
 
-
 Pose KalmanFilter::getPose() const {
     return {Point(x(0), x(1), 0),
-            Rotate(x(3), 0, 0)};
+            Rotate(x(4), 0, 0)};
 }
