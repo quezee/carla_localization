@@ -217,7 +217,8 @@ po::variables_map parse_config(int argc, char *argv[]) {
 	po::options_description desc("Configuration");
 	desc.add_options()
 		("config", po::value<string>()->default_value("config.cfg"), "path to config")
-		("data.map", po::value<string>()->required(), "path to pcl map")
+		("general.autopilot", po::value<bool>()->required(), "whether to use autopilot for ego")
+		("general.map", po::value<string>()->required(), "path to pcl map")
 
 		("lidar.batch_size", po::value<size_t>()->required(), "how many points to accumulate to match scans")
 		("lidar.rot_frq", po::value<string>()->required(), "rotation frequency")
@@ -255,6 +256,7 @@ int main(int argc, char *argv[]) {
 
 	po::variables_map vm {parse_config(argc, argv)};
 	
+	// set world and ego
 	auto client = cc::Client("localhost", 2000);
 	client.SetTimeout(10s);
 	auto world = client.GetWorld();
@@ -266,20 +268,25 @@ int main(int argc, char *argv[]) {
 	auto sp_transform = map->GetRecommendedSpawnPoints()[1];
 	auto ego = world.SpawnActor((*vehicles)[12], sp_transform);
 
+	auto vehicle = boost::static_pointer_cast<cc::Vehicle>(ego);
+	if (vm["general.autopilot"].as<bool>())
+		vehicle->SetAutopilot();
+
+	// set viewer
 	pcl::visualization::PCLVisualizer::Ptr viewer (new pcl::visualization::PCLVisualizer ("3D Viewer"));
   	viewer->setBackgroundColor (0, 0, 0);
-	viewer->registerKeyboardCallback(keyboardEventOccurred, (void*)&viewer);
+	viewer->registerKeyboardCallback(keyboardEventOccurred, (void*)&viewer);	
 
-	auto vehicle = boost::static_pointer_cast<cc::Vehicle>(ego);
-
-	// Load map
+	// load map
 	PointCloudT::Ptr mapCloud (new PointCloudT);
-  	pcl::io::loadPCDFile(vm["data.map"].as<string>(), *mapCloud);
+  	pcl::io::loadPCDFile(vm["general.map"].as<string>(), *mapCloud);
   	cout << "Loaded " << mapCloud->size() << " data points from map" << endl;
 	renderPointCloud(viewer, mapCloud, "map", Color(0,0,1)); 
 
+	// set localizer
 	Localizer localizer (vm, world, blueprint_library, ego, mapCloud);
 
+	// main loop
 	Pose poseRef = getTruePose(vehicle);
 	double maxError = 0;
 	double meanError = 0;
@@ -313,6 +320,10 @@ int main(int argc, char *argv[]) {
 			Accuate(accuate, control);
 			vehicle->ApplyControl(control);
 		}
+		// skip traffic light
+		auto tl = vehicle->GetTrafficLight();
+		if (tl)
+			tl->SetState(carla::rpc::TrafficLightState::Green);
 
   		viewer->spinOnce ();
 		
