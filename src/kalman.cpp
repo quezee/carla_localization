@@ -2,31 +2,41 @@
 #include "kalman.h"
 using namespace Eigen;
 
-KalmanFilter::KalmanFilter(double var_x, double var_y, double var_v, double var_a,
-                           double var_yaw, double var_w, double std_j, double std_wd)
-    : var_x(var_x), var_y(var_y), var_v(var_v), var_a(var_a), var_yaw(var_yaw)
-    , var_w(var_w), var_j(pow(std_j, 2)), var_wd(pow(std_wd, 2))
+KalmanFilter::KalmanFilter(const VectorXd& meas_noise, double std_j, double std_wd,
+                           size_t n_x, size_t n_aug, size_t n_z)
+    : n_x(n_x), n_aug(n_aug), n_z(n_z), n_sigmas(1 + 2*n_aug), lambda(3 - n_aug)
+    , var_j(pow(std_j, 2)), var_wd(pow(std_wd, 2))
 {
-    x.setZero();
-    P.setIdentity();
-    H.setIdentity();
+    x.setZero(n_x, 1);
+    x_aug.setZero(n_aug, 1);
+    P.setIdentity(n_x, n_x);
+    P_aug.setZero(n_aug, n_aug);
+    L.setZero(n_aug, n_aug);
+    Xsig_aug.setZero(n_aug, n_sigmas);
+    Xsig_pred.setZero(n_x, n_sigmas);
+    Zsig_pred.setZero(n_z, n_sigmas);
+    weights.setZero(n_sigmas, 1);
+    z.setZero(n_z, 1);
+    z_pred.setZero(n_z, 1);
+    S.setZero(n_z, n_z);
+    H.setIdentity(n_z, n_x);
+    T.setZero(n_x, n_z);
+    K.setZero(n_x, n_z);
+    I.setIdentity(n_x, n_x);
 
-    R.setZero();
-    R.diagonal() << var_x, var_y, var_v, var_a, var_yaw, var_w;
-
-    I.setIdentity();
+    R.setZero(n_z, n_z);
+    R.diagonal() << meas_noise;
 }
 
 void KalmanFilter::CalculateSigmaPoints() {
     // set augmented mean vector
     x_aug.setZero();
-    x_aug.topRows(6) = x;
+    x_aug.topRows(n_x) = x;
 
     // set augmented state covariance
-    P_aug.setZero();
-    P_aug.topLeftCorner(6, 6) = P;
-    P_aug(6, 6) = var_j;
-    P_aug(7, 7) = var_wd;
+    P_aug.topLeftCorner(n_x, n_x) = P;
+    P_aug(n_x, n_x)     = var_j;
+    P_aug(n_x+1, n_x+1) = var_wd;
 
     // calculate square root of P_aug
     L = P_aug.llt().matrixL();
@@ -121,7 +131,7 @@ void KalmanFilter::Update(const Measurement& meas, double dt) {
     }
     
     K = T * S.inverse();
-    z << meas.x, meas.y, meas.v, meas.a, meas.yaw, meas.w;
+    z << meas.x, meas.y, meas.a, meas.yaw, meas.w;
     x += K * (z - z_pred);
     x(4) = fmod(x(4), 2*M_PI);
     P -= K * S * K.transpose();    
