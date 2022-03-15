@@ -19,10 +19,16 @@ KalmanFilter::KalmanFilter(const VectorXd& meas_noise, double std_j, double std_
     z.setZero(n_z, 1);
     z_pred.setZero(n_z, 1);
     S.setZero(n_z, n_z);
-    H.setIdentity(n_z, n_x);
     T.setZero(n_x, n_z);
     K.setZero(n_x, n_z);
     I.setIdentity(n_x, n_x);
+
+    H.setZero(n_z, n_x);
+    H(0, 0) = 1;
+    H(1, 1) = 1;
+    H(2, 3) = 1;
+    H(3, 4) = 1;
+    H(4, 5) = 1;
 
     R.setZero(n_z, n_z);
     R.diagonal() << meas_noise;
