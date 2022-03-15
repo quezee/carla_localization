@@ -58,21 +58,6 @@ void keyboardEventOccurred(const pcl::visualization::KeyboardEvent &event, void*
 		refresh_view = true;
 }
 
-class Speedometer {
-private:
-	cptr<cc::Actor> ego;
-    mutable std::default_random_engine gen;
-	mutable std::normal_distribution<double> noise;
-public:
-	Speedometer(cptr<cc::Actor> ego, double std)
-		: ego(ego), noise(0, std)
-	{}
-	double GetMeasure() const {
-		cg::Vector3D v_vec = ego->GetVelocity();
-		double v = std::hypot(v_vec.x, v_vec.y);
-		return v + noise(gen);
-	}
-};
 
 class Localizer {
 private:
@@ -82,7 +67,6 @@ private:
 	PointCloudT::Ptr currentCloud, cloudFiltered;
 	cptr<cc::Actor> ego;
 	boost::shared_ptr<cc::Sensor> lidar, imu;
-	Speedometer speedometer;
 	size_t batch_size;
 	float min_pnt_dist;
 	pcl::NormalDistributionsTransform<pcl::PointXYZ, pcl::PointXYZ> ndt;
@@ -153,7 +137,6 @@ public:
 		: ego(ego)
 		, batch_size(vm["lidar.batch_size"].as<size_t>())
 		, min_pnt_dist(vm["lidar.min_pnt_dist"].as<float>())
-		, speedometer(ego, vm["speed.std"].as<double>())
 		, currentCloud(new PointCloudT)
 		, cloudFiltered(new PointCloudT)
 		, ndtReady(false), imuReady(false)
@@ -168,15 +151,15 @@ public:
 				vm["ndt.step_size"].as<float>(),
 				vm["ndt.max_iter"].as<size_t>());
 		initIMU(world, bpl, ego);
-		if (vm["kalman.use"].as<bool>())
-			kalman = KalmanFilter(vm["kalman.var_x"].as<double>(),
-								  vm["kalman.var_y"].as<double>(),
-								  vm["kalman.var_v"].as<double>(),
-								  vm["kalman.var_a"].as<double>(),
-								  vm["kalman.var_yaw"].as<double>(),
-								  vm["kalman.var_w"].as<double>(),
+		if (vm["kalman.use"].as<bool>()) {
+			VectorXd meas_noise (5);
+			meas_noise << vm["kalman.var_x"].as<double>(), vm["kalman.var_y"].as<double>(),
+						  vm["kalman.var_a"].as<double>(), vm["kalman.var_yaw"].as<double>(),
+						  vm["kalman.var_w"].as<double>();
+			kalman = KalmanFilter(meas_noise,
 								  vm["kalman.std_j"].as<double>(),
 								  vm["kalman.std_wd"].as<double>());
+		}
 	}
 	bool MeasurementIsReady() const {
 		return ndtReady && imuReady;
@@ -206,7 +189,6 @@ public:
 			// Fulfill measurement
 			meas.x = pose.position.x;
 			meas.y = pose.position.y;
-			meas.v = speedometer.GetMeasure();
 			meas.yaw = pose.rotation.yaw;
 
 			// Update timedelta
@@ -252,8 +234,6 @@ po::variables_map parse_config(int argc, char *argv[]) {
 		("ndt.resolution", po::value<float>()->required(), "voxel grid resolution")
 		("ndt.step_size", po::value<float>()->required(), "newton line search max step")
 		("ndt.max_iter", po::value<size_t>()->required(), "newton max iterations")
-
-		("speed.std", po::value<double>()->required(), "speedometer noise std")
 
 		("kalman.use", po::value<bool>()->required(), "whether to use kalman filter")
 		("kalman.var_x", po::value<double>()->required())
