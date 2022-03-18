@@ -37,6 +37,7 @@ private:
     void PredictSigmaPoints(double dt);
     void PredictMeanAndCovariance();
     void PredictMeasurement();
+    // void RegisterMeasurement(const Measurement& meas);
 public:
     KalmanFilter(const VectorXd& meas_noise, double std_j, double std_wd,
                  size_t n_x = 6, size_t n_aug = 8, size_t n_z = 5);

@@ -1,222 +1,14 @@
-#include <string>
-#include <sstream>
-#include <chrono> 
-#include <ctime> 
-#include <cmath>
-#include <random>
 #include <thread>
-#include <boost/program_options.hpp>
-
-#include <pcl/filters/voxel_grid.h>
-#include <pcl/registration/icp.h>
-#include <pcl/registration/ndt.h>
-#include <pcl/console/time.h>
-
-#include <carla/client/Vehicle.h>
 #include <carla/client/Client.h>
-#include <carla/client/ActorBlueprint.h>
-#include <carla/client/BlueprintLibrary.h>
-#include <carla/client/Map.h>
-#include <carla/geom/Location.h>
-#include <carla/geom/Transform.h>
-#include <carla/client/Sensor.h>
-#include <carla/sensor/data/LidarMeasurement.h>
-#include <carla/sensor/data/IMUMeasurement.h>
+#include "localizer.h"
 
-#include "helper.h"
-#include "kalman.h"
+namespace pv = pcl::visualization;
 
-using namespace std;
-using namespace chrono;
-using namespace chrono_literals;
-using namespace string_literals;
-namespace po = boost::program_options;
-namespace csd = carla::sensor::data;
-
-template <class T>
-using cptr = carla::SharedPtr<T>;
-
-PointCloudT pclCloud;
 cc::Vehicle::Control control;
 time_point<system_clock> currentTime;
 vector<ControlState> cs;
 bool refresh_view = false;
 
-void keyboardEventOccurred(const pcl::visualization::KeyboardEvent &event, void* viewer)
-{
-	if (event.getKeySym() == "Right" && event.keyDown())
-		cs.push_back(ControlState(0, -0.02, 0));
-	else if (event.getKeySym() == "Left" && event.keyDown())
-		cs.push_back(ControlState(0, 0.02, 0)); 
-
-  	if (event.getKeySym() == "Up" && event.keyDown())
-		cs.push_back(ControlState(0.1, 0, 0));
-	else if (event.getKeySym() == "Down" && event.keyDown())
-		cs.push_back(ControlState(-0.1, 0, 0)); 
-
-	if (event.getKeySym() == "a" && event.keyDown())
-		refresh_view = true;
-}
-
-
-class Localizer {
-private:
-	Pose pose;
-	bool ndtReady, imuReady;
-	time_point<system_clock> lastUpdateTime;
-	PointCloudT::Ptr currentCloud, cloudFiltered;
-	cptr<cc::Actor> ego;
-	boost::shared_ptr<cc::Sensor> lidar, imu;
-	size_t batch_size;
-	float min_pnt_dist;
-	pcl::NormalDistributionsTransform<pcl::PointXYZ, pcl::PointXYZ> ndt;
-	Measurement meas;
-	std::optional<KalmanFilter> kalman;
-
-	void initLidar(cc::World& world, cptr<cc::BlueprintLibrary> bpl, cptr<cc::Actor> ego,
-				   const string& rot_frq, const string& pts_per_sec) {
-		auto lidar_bp = *(bpl->Find("sensor.lidar.ray_cast"));
-		lidar_bp.SetAttribute("upper_fov", "15");
-		lidar_bp.SetAttribute("lower_fov", "-25");
-		lidar_bp.SetAttribute("channels", "32");
-		lidar_bp.SetAttribute("range", "30");
-		lidar_bp.SetAttribute("rotation_frequency", rot_frq);
-		lidar_bp.SetAttribute("points_per_second", pts_per_sec);
-		auto lidar_actor = world.SpawnActor(lidar_bp,
-											cg::Transform(cg::Location(-0.5, 0, 1.8)),
-											ego.get());
-		lidar = boost::static_pointer_cast<cc::Sensor>(lidar_actor);
-		lidar->Listen([this] (auto data) {
-			if (!ndtReady) {
-				auto scan = boost::static_pointer_cast<csd::LidarMeasurement>(data);
-				for (auto detection : *scan) {
-					if (std::hypot(detection.point.x, detection.point.y, detection.point.z) > min_pnt_dist)
-						pclCloud.points.push_back(PointT(detection.point.x, detection.point.y, detection.point.z));
-				}
-				if (pclCloud.size() >= batch_size) {
-					// cout << scanCloud->size() << endl;
-					*currentCloud = pclCloud;
-					ndtReady = true;
-				}
-			}
-		});
-	}
-	void initNDT(PointCloudT::Ptr mapCloud, float trans_eps,
-				 float resolution, float step_size, size_t max_iter) {
-		ndt.setInputTarget(mapCloud);
-		ndt.setInputSource(currentCloud);
-		ndt.setTransformationEpsilon(trans_eps);
-		ndt.setResolution(resolution);
-		ndt.setStepSize(step_size);
-		ndt.setMaximumIterations(max_iter);
-	}	
-	void initIMU(cc::World& world, cptr<cc::BlueprintLibrary> bpl, cptr<cc::Actor> ego) {
-		auto imu_bp = *(bpl->Find("sensor.other.imu"));
-		imu_bp.SetAttribute("noise_accel_stddev_x", "0");
-		imu_bp.SetAttribute("noise_accel_stddev_y", "0");
-		imu_bp.SetAttribute("noise_gyro_stddev_z", "0");
-		auto imu_actor = world.SpawnActor(imu_bp,
-										  cg::Transform(cg::Location(-0.5, 0, 1.8)),
-										  ego.get());
-		imu = boost::static_pointer_cast<cc::Sensor>(imu_actor);
-		imu->Listen([this] (auto data) {
-			if (!imuReady) {
-				auto imu_meas = boost::static_pointer_cast<csd::IMUMeasurement>(data);
-				cg::Vector3D accel = imu_meas->GetAccelerometer();
-				meas.a = std::hypot(accel.x, accel.y);
-				meas.w = imu_meas->GetGyroscope().z;
-				imuReady = true;
-			}
-		});
-	}
-
-public:
-	Localizer(const po::variables_map& vm, cc::World& world,
-			  cptr<cc::BlueprintLibrary> bpl, cptr<cc::Actor> ego,
-			  PointCloudT::Ptr mapCloud)
-		: ego(ego)
-		, batch_size(vm["lidar.batch_size"].as<size_t>())
-		, min_pnt_dist(vm["lidar.min_pnt_dist"].as<float>())
-		, currentCloud(new PointCloudT)
-		, cloudFiltered(new PointCloudT)
-		, ndtReady(false), imuReady(false)
-		, lastUpdateTime(system_clock::now())
-	{
-		initLidar(world, bpl, ego,
-				  vm["lidar.rot_frq"].as<string>(),
-				  vm["lidar.pts_per_sec"].as<string>());
-		initNDT(mapCloud,
-				vm["ndt.trans_eps"].as<float>(),
-				vm["ndt.resolution"].as<float>(),
-				vm["ndt.step_size"].as<float>(),
-				vm["ndt.max_iter"].as<size_t>());
-		initIMU(world, bpl, ego);
-		if (vm["kalman.use"].as<bool>()) {
-			VectorXd meas_noise (5);
-			meas_noise << vm["kalman.var_x"].as<double>(), vm["kalman.var_y"].as<double>(),
-						  vm["kalman.var_a"].as<double>(), vm["kalman.var_yaw"].as<double>(),
-						  vm["kalman.var_w"].as<double>();
-			kalman = KalmanFilter(meas_noise,
-								  vm["kalman.std_j"].as<double>(),
-								  vm["kalman.std_wd"].as<double>());
-		}
-	}
-	bool MeasurementIsReady() const {
-		return ndtReady && imuReady;
-	}
-	const Pose& GetPose() const {
-		return pose;
-	}
-	pair<Eigen::Matrix4f, PointCloudT::Ptr> NDT() {
-		Eigen::Matrix4f startingTrans = getTransform(pose);
-
-		PointCloudT::Ptr aligned (new PointCloudT);
-		ndt.align(*aligned, startingTrans);
-
-		if (!ndt.hasConverged()) {
-			std::cout << "didn't converge" << std::endl;
-			return {Eigen::Matrix4f::Identity(), aligned};
-		}
-		Eigen::Matrix4f transform = ndt.getFinalTransformation();
-		return {transform, aligned};
-	}
-	const std::shared_ptr<PointCloudT> Localize() {
-		// Find pose transform by using NDT matching
-		auto [transform, scanAligned] = NDT();
-		pose = getPose(transform);
-
-		if (kalman.has_value()) {
-			// Fulfill measurement
-			meas.x = pose.position.x;
-			meas.y = pose.position.y;
-			meas.yaw = pose.rotation.yaw;
-
-			// Update timedelta
-			auto dt = duration_cast<milliseconds>(
-				system_clock::now() - lastUpdateTime
-			);
-			double dt_sec = (double)dt.count() / 1000;
-
-			// Get updated KF state
-			kalman.value().Update(meas, dt_sec);
-			pose = kalman.value().getPose();
-			transform = getTransform(pose);
-		}
-		// Transform scan so it aligns with ego's actual pose and render the scan
-		pcl::transformPointCloud(*currentCloud, *scanAligned, transform);
-		ndtReady = false;
-		imuReady = false;
-		lastUpdateTime = system_clock::now();
-		return scanAligned;
-	}
-	~Localizer() {
-		cout << "Destroyed:"
-			 << "\n -lidar: " << lidar->Destroy()		
-			 << "\n -imu: " << imu->Destroy()
-			 << "\n -ego: " << ego->Destroy()
-			 << endl;
-	}
-};
 
 po::variables_map parse_config(int argc, char *argv[]) {
 	po::options_description desc("Configuration");
@@ -251,13 +43,30 @@ po::variables_map parse_config(int argc, char *argv[]) {
 	string cfg_fname {vm["config"].as<string>()}; 
 	ifstream ifs (cfg_fname);
 	if (ifs.fail())
-		throw invalid_argument("Failed to open config file: " + cfg_fname);
+		throw std::invalid_argument("Failed to open config file: " + cfg_fname);
 
 	po::store(po::parse_config_file(ifs, desc), vm);
 	po::notify(vm);
 
 	return vm;
 }
+
+void keyboardEventOccurred(const pv::KeyboardEvent &event, void* viewer)
+{
+	if (event.getKeySym() == "Right" && event.keyDown())
+		cs.push_back(ControlState(0, -0.02, 0));
+	else if (event.getKeySym() == "Left" && event.keyDown())
+		cs.push_back(ControlState(0, 0.02, 0)); 
+
+  	if (event.getKeySym() == "Up" && event.keyDown())
+		cs.push_back(ControlState(0.1, 0, 0));
+	else if (event.getKeySym() == "Down" && event.keyDown())
+		cs.push_back(ControlState(-0.1, 0, 0)); 
+
+	if (event.getKeySym() == "a" && event.keyDown())
+		refresh_view = true;
+}
+
 
 int main(int argc, char *argv[]) {
 
@@ -280,12 +89,12 @@ int main(int argc, char *argv[]) {
 		vehicle->SetAutopilot();
 
 	// set viewer
-	pcl::visualization::PCLVisualizer::Ptr viewer (new pcl::visualization::PCLVisualizer ("3D Viewer"));
+	pv::PCLVisualizer::Ptr viewer = make_shared<pv::PCLVisualizer>("3D Viewer");
   	viewer->setBackgroundColor (0, 0, 0);
 	viewer->registerKeyboardCallback(keyboardEventOccurred, (void*)&viewer);	
 
 	// load map
-	PointCloudT::Ptr mapCloud (new PointCloudT);
+	PointCloudT::Ptr mapCloud = make_shared<PointCloudT>();
   	pcl::io::loadPCDFile(vm["general.map"].as<string>(), *mapCloud);
   	cout << "Loaded " << mapCloud->size() << " data points from map" << endl;
 	renderPointCloud(viewer, mapCloud, "map", Color(0,0,1)); 
@@ -306,7 +115,8 @@ int main(int argc, char *argv[]) {
 
 		if (refresh_view) {
 			const Pose& pose = localizer.GetPose();
-			viewer->setCameraPosition(pose.position.x, pose.position.y, 60, pose.position.x+1, pose.position.y+1, 0, 0, 0, 1);
+			viewer->setCameraPosition(pose.position.x, pose.position.y, 60,
+									  pose.position.x+1, pose.position.y+1, 0, 0, 0, 1);
 			refresh_view = false;
 		}
 		
@@ -317,7 +127,9 @@ int main(int argc, char *argv[]) {
 		double theta = truePose.rotation.yaw;
 		double stheta = control.steer * pi/4 + theta;
 		viewer->removeShape("steer");
-		renderRay(viewer, Point(truePose.position.x+2*cos(theta), truePose.position.y+2*sin(theta),truePose.position.z),  Point(truePose.position.x+4*cos(stheta), truePose.position.y+4*sin(stheta),truePose.position.z), "steer", Color(0,1,0));
+		renderRay(viewer, Point(truePose.position.x+2*cos(theta), truePose.position.y+2*sin(theta),truePose.position.z),
+				  Point(truePose.position.x+4*cos(stheta), truePose.position.y+4*sin(stheta),truePose.position.z),
+				  "steer", Color(0,1,0));
 
 		ControlState accuate(0, 0, 1);
 		if(cs.size() > 0){
@@ -356,14 +168,6 @@ int main(int argc, char *argv[]) {
 			viewer->addText("Pose error: "+to_string(poseError)+" m", 200, 200, 32, 1.0, 1.0, 1.0, "derror",0);
 			viewer->removeShape("dist");
 			viewer->addText("Distance: "+to_string(distDriven)+" m", 200, 250, 32, 1.0, 1.0, 1.0, "dist",0);
-
-			if (maxError > 1.2 || distDriven >= 170.0)
-				viewer->removeShape("eval");
-			if (maxError > 1.2)
-				viewer->addText("Try Again", 200, 50, 32, 1.0, 0.0, 0.0, "eval",0);
-			else
-				viewer->addText("Passed!", 200, 50, 32, 0.0, 1.0, 0.0, "eval",0);
 		}
-		pclCloud.points.clear();
 	}
 }

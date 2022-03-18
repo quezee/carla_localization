@@ -120,6 +120,10 @@ void KalmanFilter::PredictMeasurement() {
     }
 }
 
+// void KalmanFilter::RegisterMeasurement(const Measurement& meas) {
+//     z << meas.x, meas.y, meas.a, meas.yaw, meas.w;
+// }
+
 void KalmanFilter::Update(const Measurement& meas, double dt) {
     CalculateSigmaPoints();
     PredictSigmaPoints(dt);

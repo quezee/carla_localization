@@ -7,10 +7,13 @@
 #include <Eigen/Geometry>
 #include <carla/client/Vehicle.h>
 
-typedef pcl::PointXYZ PointT;
-typedef pcl::PointCloud<PointT> PointCloudT;
+using PointT = pcl::PointXYZ;
+using PointCloudT = pcl::PointCloud<PointT>;
+using std::vector;
+using std::to_string;
+using std::min;
+using std::max;
 
-using namespace std;
 namespace cc = carla::client;
 namespace cg = carla::geom;
 
