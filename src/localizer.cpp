@@ -57,7 +57,7 @@ void Localizer::initLidar(cc::World& world, boost::shared_ptr<cc::BlueprintLibra
             auto scan = boost::static_pointer_cast<csd::LidarMeasurement>(data);
             for (auto detection : *scan)
                 if (std::hypot(detection.point.x, detection.point.y, detection.point.z) > min_pnt_dist)
-                    currentCloud->push_back(PointT(detection.point.x, detection.point.y, detection.point.z));
+                    currentCloud->emplace_back(detection.point.x, detection.point.y, detection.point.z);
             if (currentCloud->size() >= batch_size)
                 ndtReady = true;
         }
@@ -92,6 +92,7 @@ void Localizer::initIMU(cc::World& world, boost::shared_ptr<cc::BlueprintLibrary
             cg::Vector3D accel = imu_meas->GetAccelerometer();
             meas.a = accel.x;
             meas.w = imu_meas->GetGyroscope().z;
+            // cout << accel.x << ' ' << accel.y << ' ' << accel.z << ' ' << meas.w << endl;
             imuReady = true;
         }
     });

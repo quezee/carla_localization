@@ -54,14 +54,14 @@ po::variables_map parse_config(int argc, char *argv[]) {
 void keyboardEventOccurred(const pv::KeyboardEvent &event, void* viewer)
 {
 	if (event.getKeySym() == "Right" && event.keyDown())
-		cs.push_back(ControlState(0, -0.02, 0));
+		cs.emplace_back(0, -0.02, 0);
 	else if (event.getKeySym() == "Left" && event.keyDown())
-		cs.push_back(ControlState(0, 0.02, 0)); 
+		cs.emplace_back(0, 0.02, 0); 
 
   	if (event.getKeySym() == "Up" && event.keyDown())
-		cs.push_back(ControlState(0.1, 0, 0));
+		cs.emplace_back(0.1, 0, 0);
 	else if (event.getKeySym() == "Down" && event.keyDown())
-		cs.push_back(ControlState(-0.1, 0, 0)); 
+		cs.emplace_back(-0.1, 0, 0); 
 
 	if (event.getKeySym() == "a" && event.keyDown())
 		refresh_view = true;
