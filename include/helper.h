@@ -6,6 +6,7 @@
 #include <vector>
 #include <Eigen/Geometry>
 #include <carla/client/Vehicle.h>
+#include <carla/geom/GeoLocation.h>
 
 using PointT = pcl::PointXYZ;
 using PointCloudT = pcl::PointCloud<PointT>;
@@ -85,9 +86,10 @@ struct Pose{
 		: position(setPos), rotation(setRotation) {}
 
 	Pose operator-(const Pose& p)
-    {
-        Pose result(Point(position.x-p.position.x, position.y-p.position.y, position.z-p.position.z), Rotate(rotation.yaw-p.rotation.yaw, rotation.pitch-p.rotation.pitch, rotation.roll-p.rotation.roll) );
-        return result;
+    {	
+		Point pos {position.x-p.position.x, position.y-p.position.y, position.z-p.position.z};
+		Rotate rot {rotation.yaw-p.rotation.yaw, rotation.pitch-p.rotation.pitch, rotation.roll-p.rotation.roll};
+        return {pos, rot};
     }
 };
 
@@ -122,7 +124,15 @@ struct BoxQ
 
 Eigen::Matrix4f transform2D(double theta, double xt, double yt);
 Eigen::Matrix4f transform3D(double yaw, double pitch, double roll, double xt, double yt, double zt);
-Pose getPose(Eigen::Matrix4f matrix);
+
+double getX(const Eigen::Matrix4f& transform);
+double getY(const Eigen::Matrix4f& transform);
+double getZ(const Eigen::Matrix4f& transform);
+double getYaw(const Eigen::Matrix4f& transform);
+double getPitch(const Eigen::Matrix4f& transform);
+double getRoll(const Eigen::Matrix4f& transform);
+Pose getPose(const Eigen::Matrix4f& transform);
+
 Eigen::Matrix4f getTransform (Pose pose);
 double getDistance(Point p1, Point p2);
 double minDistance(Point p1, vector<Point> points);
@@ -135,3 +145,23 @@ void Accuate(ControlState response, cc::Vehicle::Control& state);
 void drawCar(const Pose& pose, int num, const Color& color, double alpha,
              pcl::visualization::PCLVisualizer::Ptr& viewer);
 Pose getTruePose(const boost::shared_ptr<cc::Vehicle>& vehicle, Pose poseRef = Pose());
+cg::Location gnss2location(cg::GeoLocation loc);
+
+struct Measurement {
+	size_t dim = 0;
+};
+struct IMUMeasurement : public Measurement {
+    double ax, ay, yaw_rate;
+	IMUMeasurement(double ax, double ay, double yaw_rate)
+        : ax(ax), ay(ay), yaw_rate(yaw_rate) { dim = 3; }
+};
+struct GNSSMeasurement : public Measurement {
+    double lat, lon;
+	GNSSMeasurement(double lat, double lon)
+        : lat(lat), lon(lon) { dim = 2; }
+};
+struct LidarMeasurement : public Measurement {
+    double x, y, yaw;
+	LidarMeasurement(double x, double y, double yaw)
+        : x(x), y(y), yaw(yaw) { dim = 3; }
+};

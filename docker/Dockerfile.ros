@@ -1,0 +1,62 @@
+FROM ros:foxy-ros-base
+
+RUN rm /bin/sh && ln -s /bin/bash /bin/sh
+
+# CARLA prerequisites
+RUN touch /etc/apt/apt.conf.d/99verify-peer.conf \
+    && echo >>/etc/apt/apt.conf.d/99verify-peer.conf "Acquire { https::Verify-Peer false }"
+RUN apt update && apt install -y wget software-properties-common
+RUN add-apt-repository ppa:ubuntu-toolchain-r/test
+RUN apt update && apt install -y \
+    build-essential clang-8 lld-8 g++-7 cmake ninja-build libvulkan1 libpng-dev libtiff5-dev \
+    libjpeg-dev tzdata sed curl unzip autoconf libtool rsync libxml2-dev
+RUN update-alternatives --install /usr/bin/clang++ clang++ /usr/lib/llvm-8/bin/clang++ 180 && \
+    update-alternatives --install /usr/bin/clang clang /usr/lib/llvm-8/bin/clang 180
+
+# CARLA client
+RUN git clone https://github.com/carla-simulator/carla
+RUN sed -i 's/ftp.cixug.es\/apache\//downloads.apache.org/' /carla/Util/BuildTools/Setup.sh
+RUN cd /carla/Examples/CppClient && make run
+
+# ROS bridge
+RUN apt install -y python3-dev python3-pip
+RUN mkdir -p ~/carla-ros-bridge && cd ~/carla-ros-bridge && \
+    git clone --recurse-submodules https://github.com/carla-simulator/ros-bridge.git src/ros-bridge && \
+    source /opt/ros/foxy/setup.bash && \
+    rosdep update &&  \
+    DEBIAN_FRONTEND=noninteractive rosdep install -y --from-paths src --ignore-src -r && \
+    colcon build
+
+# VTK
+WORKDIR /tmp
+RUN apt-get update && apt-get install -y \
+    libxt-dev 
+RUN wget https://www.vtk.org/files/release/8.2/VTK-8.2.0.tar.gz \
+    && tar -xf VTK-8.2.0.tar.gz \
+    && cd VTK-8.2.0 && mkdir build && cd build \
+    && cmake .. -DVTK_MODULE_ENABLE_VTK_RenderingContextOpenGL2=YES \
+                -DCMAKE_BUILD_TYPE=Release \
+    && make -j$(nproc) \
+    && make install
+
+# PCL
+ENV DEBIAN_FRONTEND=noninteractive
+WORKDIR /tmp
+ENV PCL_VERSION="1.11.0"
+RUN apt install -y \
+    libeigen3-dev libflann-dev libglu1-mesa-dev freeglut3-dev mesa-common-dev \
+    libboost-all-dev libusb-1.0-0-dev libusb-dev libopenni-dev libopenni2-dev \
+    libpcap-dev libpng-dev mpi-default-dev openmpi-bin openmpi-common \
+    libqhull-dev libgtest-dev
+RUN wget https://github.com/PointCloudLibrary/pcl/archive/pcl-${PCL_VERSION}.tar.gz \
+    && tar -xf pcl-${PCL_VERSION}.tar.gz \
+    && cd pcl-pcl-${PCL_VERSION} \
+    && mkdir build \
+    && cd build \
+    && cmake .. -DCMAKE_BUILD_TYPE=Release \
+                -DVTK_RENDERING_BACKEND=OpenGL2 \
+    && make -j$(nproc)\
+    && make install
+RUN apt update && apt install -y pcl-tools
+RUN unset PCL_VERSION
+RUN unset DEBIAN_FRONTEND

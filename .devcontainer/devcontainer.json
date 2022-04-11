@@ -4,11 +4,17 @@
 	"name": "Docker from Docker",
 	"dockerFile": "Dockerfile",
 	"runArgs": [
-        "--net", "host", 
+		"--net", "host", 
         "-e", "DISPLAY=${env:DISPLAY}",
+		"-e", "XAUTHORITY=${env:XAUTHORITY}",
         "-v", "/tmp/.X11-unix:/tmp/.X11-unix",
 		"--gpus", "all"
 	],
+    "build": {
+        "args": {
+            "network": "host"
+        }
+    },
 	"mounts": ["source=/var/run/docker.sock,target=/var/run/docker-host.sock,type=bind"],
 	"overrideCommand": false,
 	

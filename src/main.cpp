@@ -1,41 +1,57 @@
 #include <thread>
 #include <carla/client/Client.h>
 #include "localizer.h"
+#include <carla/client/Map.h>
 
 namespace pv = pcl::visualization;
+using namespace Eigen;
+using Matrix5d = Matrix<double, 5, 5>;
 
 cc::Vehicle::Control control;
 time_point<system_clock> currentTime;
-vector<ControlState> cs;
+vector<ControlState> controls;
 bool refresh_view = false;
 
 
 po::variables_map parse_config(int argc, char *argv[]) {
 	po::options_description desc("Configuration");
 	desc.add_options()
-		("config", po::value<string>()->default_value("config.cfg"), "path to config")
+		("config", po::value<string>()->default_value("/workspaces/carla_localization/config.cfg"), "path to config")
 		("general.autopilot", po::value<bool>()->required(), "whether to use autopilot for ego")
 		("general.map", po::value<string>()->required(), "path to pcl map")
+		
+		("general.use_gnss", po::value<bool>()->required())
+		("general.use_imu", po::value<bool>()->required())
+		("general.use_lidar", po::value<bool>()->required())
 
+		("imu.var_x", po::value<double>()->required())
+		("imu.var_y", po::value<double>()->required())
+		("imu.var_yaw", po::value<double>()->required())
+		("imu.sensor_tick", po::value<string>()->required())
+
+		("gnss.var_lat", po::value<double>()->required())
+		("gnss.var_lon", po::value<double>()->required())
+		("gnss.lat_bias", po::value<string>()->required())
+		("gnss.lat_stddev", po::value<string>()->required())
+		("gnss.lon_bias", po::value<string>()->required())
+		("gnss.lon_stddev", po::value<string>()->required())
+		("gnss.sensor_tick", po::value<string>()->required())
+
+		("lidar.var_x", po::value<double>()->required())
+		("lidar.var_y", po::value<double>()->required())
+		("lidar.var_yaw", po::value<double>()->required())
 		("lidar.batch_size", po::value<size_t>()->required(), "how many points to accumulate to match scans")
 		("lidar.rot_frq", po::value<string>()->required(), "rotation frequency")
 		("lidar.pts_per_sec", po::value<string>()->required(), "points per second")
 		("lidar.min_pnt_dist", po::value<float>()->required(), "filter out closest points within this radius")
+		("lidar.sensor_tick", po::value<string>()->required())
 
 		("ndt.trans_eps", po::value<float>()->required(), "transformation epsilon")
 		("ndt.resolution", po::value<float>()->required(), "voxel grid resolution")
 		("ndt.step_size", po::value<float>()->required(), "newton line search max step")
 		("ndt.max_iter", po::value<size_t>()->required(), "newton max iterations")
 
-		("kalman.use", po::value<bool>()->required(), "whether to use kalman filter")
-		("kalman.var_x", po::value<double>()->required())
-		("kalman.var_y", po::value<double>()->required())
-		("kalman.var_v", po::value<double>()->required())
-		("kalman.var_a", po::value<double>()->required())
-		("kalman.var_yaw", po::value<double>()->required())
-		("kalman.var_w", po::value<double>()->required())
-		("kalman.std_j", po::value<double>()->required(), "process noise std for linear jerk")
-		("kalman.std_wd", po::value<double>()->required(), "process noise std for yaw acceleration")
+		("kalman.P_init", po::value<double>()->required())
 	;
 	po::variables_map vm;
 	po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -54,14 +70,14 @@ po::variables_map parse_config(int argc, char *argv[]) {
 void keyboardEventOccurred(const pv::KeyboardEvent &event, void* viewer)
 {
 	if (event.getKeySym() == "Right" && event.keyDown())
-		cs.emplace_back(0, -0.02, 0);
+		controls.emplace_back(0, -0.02, 0);
 	else if (event.getKeySym() == "Left" && event.keyDown())
-		cs.emplace_back(0, 0.02, 0); 
+		controls.emplace_back(0, 0.02, 0); 
 
   	if (event.getKeySym() == "Up" && event.keyDown())
-		cs.emplace_back(0.1, 0, 0);
+		controls.emplace_back(0.1, 0, 0);
 	else if (event.getKeySym() == "Down" && event.keyDown())
-		cs.emplace_back(-0.1, 0, 0); 
+		controls.emplace_back(-0.1, 0, 0); 
 
 	if (event.getKeySym() == "a" && event.keyDown())
 		refresh_view = true;
@@ -71,7 +87,7 @@ void keyboardEventOccurred(const pv::KeyboardEvent &event, void* viewer)
 int main(int argc, char *argv[]) {
 
 	po::variables_map vm {parse_config(argc, argv)};
-	
+
 	// set world and ego
 	auto client = cc::Client("localhost", 2000);
 	client.SetTimeout(10s);
@@ -100,18 +116,35 @@ int main(int argc, char *argv[]) {
 	renderPointCloud(viewer, mapCloud, "map", Color(0,0,1)); 
 
 	// set localizer
-	Localizer localizer (vm, world, blueprint_library, ego, mapCloud);
+	Matrix2d R_gnss;
+	R_gnss.setZero();
+	R_gnss.diagonal() << vm["gnss.var_lat"].as<double>(), vm["gnss.var_lon"].as<double>();
+
+	Matrix3d R_lidar;
+	R_lidar.setZero();
+	R_lidar.diagonal() << vm["lidar.var_x"].as<double>(), vm["lidar.var_y"].as<double>(),
+						  vm["lidar.var_yaw"].as<double>();
+
+	Matrix5d Q;
+	Q.setZero();
+	Q.diagonal() << vm["imu.var_x"].as<double>(), vm["imu.var_y"].as<double>(),
+					vm["imu.var_yaw"].as<double>(), 0, 0;
+	
+	double P_init = vm["kalman.P_init"].as<double>();
+
+	Pose poseRef = getTruePose(vehicle);
+	KalmanFilter kalman (R_gnss, R_lidar, Q, P_init, poseRef);	
+	Localizer localizer (vm, kalman, world, blueprint_library, ego, mapCloud);
 
 	// main loop
-	Pose poseRef = getTruePose(vehicle);
 	double maxError = 0;
 	double meanError = 0;
 	size_t n_steps = 0;
   
 	while (!viewer->wasStopped())
   	{
-		while (!localizer.MeasurementIsReady())
-			std::this_thread::sleep_for(0.1s);
+		while (!localizer.MeasurementIsReady()) // TODO mb delete
+			std::this_thread::sleep_for(0.01s);
 
 		if (refresh_view) {
 			const Pose& pose = localizer.GetPose();
@@ -132,23 +165,25 @@ int main(int argc, char *argv[]) {
 				  "steer", Color(0,1,0));
 
 		ControlState accuate(0, 0, 1);
-		if(cs.size() > 0){
-			accuate = cs.back();
-			cs.clear();
+		if(controls.size() > 0){
+			accuate = controls.back();
+			controls.clear();
 
 			Accuate(accuate, control);
 			vehicle->ApplyControl(control);
 		}
 		// skip traffic light
-		auto tl = vehicle->GetTrafficLight();
-		if (tl)
-			tl->SetState(carla::rpc::TrafficLightState::Green);
+		// auto tl = vehicle->GetTrafficLight();
+		// if (tl)
+		// 	tl->SetState(carla::rpc::TrafficLightState::Green);
 
   		viewer->spinOnce ();
 		
 		if (localizer.MeasurementIsReady()) {
+			localizer.Localize();
+
 			viewer->removePointCloud("scan");
-			renderPointCloud(viewer, localizer.Localize(), "scan", Color(1,0,0) );
+			renderPointCloud(viewer, localizer.GetCloudAligned(), "scan", Color(1,0,0) );
 
 			viewer->removeAllShapes();
 			const Pose& pose = localizer.GetPose();
@@ -160,6 +195,7 @@ int main(int argc, char *argv[]) {
 			maxError = max(maxError, poseError);
 			meanError = meanError + ((poseError - meanError) / n_steps);
 			double distDriven = sqrt( pow(truePose.position.x, 2) + pow(truePose.position.y, 2) );
+
 			viewer->removeShape("meanE");
 			viewer->addText("Mean Error: "+to_string(meanError)+" m", 200, 100, 32, 1.0, 1.0, 1.0, "meanE",0);
 			viewer->removeShape("maxE");

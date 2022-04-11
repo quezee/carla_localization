@@ -1,6 +1,5 @@
 #include "helper.h"
 
-
 Eigen::Matrix4f transform2D(double theta, double xt, double yt){
 
 	Eigen::Matrix4f matrix = Eigen::Matrix4f::Identity ();
@@ -37,10 +36,27 @@ Eigen::Matrix4f transform3D(double yaw, double pitch, double roll, double xt, do
 	return matrix;
 }
 
-Pose getPose(Eigen::Matrix4f matrix){
-
-	Pose pose(Point(matrix(0,3), matrix(1,3), matrix(2,3)), Rotate(atan2(matrix(1, 0),matrix(0, 0)), atan2(-matrix(2,0), sqrt(matrix(2,1)*matrix(2,1) + matrix(2,2)*matrix(2,2))), atan2(matrix(2,1),matrix(2,2))));
-	return pose;
+double getX(const Eigen::Matrix4f& transform) {
+	return transform(0,3);
+}
+double getY(const Eigen::Matrix4f& transform) {
+	return transform(1,3);
+}
+double getZ(const Eigen::Matrix4f& transform) {
+	return transform(2,3);
+}
+double getYaw(const Eigen::Matrix4f& transform) {
+	return atan2(transform(1,0), transform(0,0));
+}
+double getPitch(const Eigen::Matrix4f& transform) {
+	return atan2(-transform(2,0), sqrt(transform(2,1)*transform(2,1) + transform(2,2)*transform(2,2)));
+}
+double getRoll(const Eigen::Matrix4f& transform) {
+	return atan2(transform(2,1), transform(2,2));
+}
+Pose getPose(const Eigen::Matrix4f& transform) {
+	return {Point(getX(transform), getY(transform), getZ(transform)),
+			Rotate(getYaw(transform), getPitch(transform), getRoll(transform))};
 }
 
 Eigen::Matrix4f getTransform (Pose pose) {
@@ -160,4 +176,23 @@ Pose getTruePose(const boost::shared_ptr<cc::Vehicle>& vehicle, Pose poseRef) {
 	Point pos (transform.location.x, transform.location.y, transform.location.z);
 	Rotate rot (transform.rotation.yaw * pi/180, transform.rotation.pitch * pi/180, transform.rotation.roll * pi/180);
 	return Pose(pos, rot) - poseRef;
+}
+
+cg::Location gnss2location(cg::GeoLocation loc) {
+	double EARTH_RADIUS_EQUA = 6378137;
+	// The following reference values are applicable for towns 1 through 7,
+	// and are taken from the corresponding OpenDrive map files.
+	double LAT_REF = 0;
+	double LON_REF = 0;
+
+	double scale = cos(LAT_REF * pi / 180);
+	double basex = scale * pi * EARTH_RADIUS_EQUA / 180 * LON_REF;
+	double basey = scale * EARTH_RADIUS_EQUA *
+					log(tan((90 + LAT_REF) * pi / 360));
+
+	double x = scale * pi * EARTH_RADIUS_EQUA / 180 * loc.longitude - basex;
+	double y = scale * EARTH_RADIUS_EQUA *
+				log(tan((90 + loc.latitude) * pi / 360)) - basey;
+	y *= -1;
+	return {x, y, loc.altitude};
 }

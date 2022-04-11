@@ -1,144 +1,144 @@
+#include <carla/sensor/data/GnssMeasurement.h>
 #include <carla/sensor/data/LidarMeasurement.h>
 #include <carla/sensor/data/IMUMeasurement.h>
 #include "localizer.h"
 
-namespace po = boost::program_options;
-namespace csd = carla::sensor::data;
+using Vector5d = Eigen::Matrix<double, 5, 1>;
 
 
-Localizer::Localizer(const po::variables_map& vm, cc::World& world,
+Localizer::Localizer(const po::variables_map& vm, KalmanFilter& kalman, cc::World& world,
                      boost::shared_ptr<cc::BlueprintLibrary> bpl,
                      boost::shared_ptr<cc::Actor> ego, PointCloudT::Ptr mapCloud)
-    : ego(ego)
+    : kalman(kalman), ego(ego)
     , batch_size(vm["lidar.batch_size"].as<size_t>())
     , min_pnt_dist(vm["lidar.min_pnt_dist"].as<float>())
-    , currentCloud(make_shared<PointCloudT>())
+    , transform(getTransform(pose))
+    , cloudCurrent(make_shared<PointCloudT>())
     , cloudFiltered(make_shared<PointCloudT>())
-    , ndtReady(false), imuReady(false)
-    , lastUpdateTime(system_clock::now())
-{
-    initLidar(world, bpl, ego,
-                vm["lidar.rot_frq"].as<string>(),
-                vm["lidar.pts_per_sec"].as<string>());
-    initNDT(mapCloud,
-            vm["ndt.trans_eps"].as<float>(),
-            vm["ndt.resolution"].as<float>(),
-            vm["ndt.step_size"].as<float>(),
-            vm["ndt.max_iter"].as<size_t>());
-    initIMU(world, bpl, ego);
-    if (vm["kalman.use"].as<bool>()) {
-        VectorXd meas_noise (5);
-        meas_noise << vm["kalman.var_x"].as<double>(), vm["kalman.var_y"].as<double>(),
-                        vm["kalman.var_a"].as<double>(), vm["kalman.var_yaw"].as<double>(),
-                        vm["kalman.var_w"].as<double>();
-        kalman = KalmanFilter(meas_noise,
-                                vm["kalman.std_j"].as<double>(),
-                                vm["kalman.std_wd"].as<double>());
+    , cloudAligned(make_shared<PointCloudT>())
+{   
+    if (vm["general.use_gnss"].as<bool>())
+        initGNSS(vm, world, bpl, ego);
+
+    if (vm["general.use_imu"].as<bool>())
+        initIMU(vm, world, bpl, ego);
+    
+    if (vm["general.use_lidar"].as<bool>()) {
+        initLidar(vm, world, bpl, ego);
+        initNDT(vm, mapCloud);
     }
 }
 
-void Localizer::initLidar(cc::World& world, boost::shared_ptr<cc::BlueprintLibrary> bpl,
-                          boost::shared_ptr<cc::Actor> ego, const string& rot_frq,
-                          const string& pts_per_sec)
+void Localizer::initGNSS(const po::variables_map& vm, cc::World& world,
+                         boost::shared_ptr<cc::BlueprintLibrary> bpl,
+                         boost::shared_ptr<cc::Actor> ego)
+{
+    auto bp = *(bpl->Find("sensor.other.gnss"));
+    bp.SetAttribute("noise_lat_bias", vm["gnss.lat_bias"].as<string>());
+    bp.SetAttribute("noise_lat_stddev", vm["gnss.lat_stddev"].as<string>());
+    bp.SetAttribute("noise_lon_bias", vm["gnss.lon_bias"].as<string>());
+    bp.SetAttribute("noise_lon_stddev", vm["gnss.lon_stddev"].as<string>());
+    bp.SetAttribute("sensor_tick", vm["gnss.sensor_tick"].as<string>());
+    auto actor = world.SpawnActor(bp,
+                                  cg::Transform(cg::Location(-0.5, 0, 1.8)),
+                                  ego.get());
+    gnss = boost::static_pointer_cast<cc::Sensor>(actor);
+    gnss->Listen([this] (auto data) {
+        if (!gnss_meas) {
+            auto meas = boost::static_pointer_cast<csd::GnssMeasurement>(data);
+            gnss_meas.emplace(meas->GetLatitude(), meas->GetLongitude());
+        }
+    });    
+}
+
+void Localizer::initLidar(const po::variables_map& vm, cc::World& world,
+                          boost::shared_ptr<cc::BlueprintLibrary> bpl,
+                          boost::shared_ptr<cc::Actor> ego)
 {
     auto lidar_bp = *(bpl->Find("sensor.lidar.ray_cast"));
     lidar_bp.SetAttribute("upper_fov", "15");
     lidar_bp.SetAttribute("lower_fov", "-25");
     lidar_bp.SetAttribute("channels", "32");
     lidar_bp.SetAttribute("range", "30");
-    lidar_bp.SetAttribute("rotation_frequency", rot_frq);
-    lidar_bp.SetAttribute("points_per_second", pts_per_sec);
+    lidar_bp.SetAttribute("rotation_frequency", vm["lidar.rot_frq"].as<string>());
+    lidar_bp.SetAttribute("points_per_second", vm["lidar.pts_per_sec"].as<string>());
+    lidar_bp.SetAttribute("sensor_tick", vm["lidar.sensor_tick"].as<string>());
     auto lidar_actor = world.SpawnActor(lidar_bp,
                                         cg::Transform(cg::Location(-0.5, 0, 1.8)),
                                         ego.get());
     lidar = boost::static_pointer_cast<cc::Sensor>(lidar_actor);
     lidar->Listen([this] (auto data) {
-        if (!ndtReady) {
+        if (!lidar_meas) {
             auto scan = boost::static_pointer_cast<csd::LidarMeasurement>(data);
             for (auto detection : *scan)
                 if (std::hypot(detection.point.x, detection.point.y, detection.point.z) > min_pnt_dist)
-                    currentCloud->emplace_back(detection.point.x, detection.point.y, detection.point.z);
-            if (currentCloud->size() >= batch_size)
-                ndtReady = true;
+                    cloudCurrent->emplace_back(detection.point.x, detection.point.y, detection.point.z);
+            
+            if (cloudCurrent->size() >= batch_size) {
+                ndt.align(*cloudAligned, transform);
+                if (ndt.hasConverged()) {
+                    Matrix4f new_transform = ndt.getFinalTransformation();
+                    lidar_meas.emplace(getX(new_transform), getY(new_transform), getYaw(new_transform));
+                } else {
+                    std::cout << "NDT didn't converge" << std::endl;
+                    lidar_meas.emplace(getX(transform), getY(transform), getYaw(transform));
+                }
+            }
         }
     });
 }
 
-void Localizer::initNDT(PointCloudT::Ptr mapCloud, float trans_eps,
-				        float resolution, float step_size, size_t max_iter)
+void Localizer::initNDT(const po::variables_map& vm, PointCloudT::Ptr mapCloud)
 {
     ndt.setInputTarget(mapCloud);
-    ndt.setInputSource(currentCloud);
-    ndt.setTransformationEpsilon(trans_eps);
-    ndt.setResolution(resolution);
-    ndt.setStepSize(step_size);
-    ndt.setMaximumIterations(max_iter);
+    ndt.setInputSource(cloudCurrent);
+    ndt.setTransformationEpsilon(vm["ndt.trans_eps"].as<float>());
+    ndt.setResolution(vm["ndt.resolution"].as<float>());
+    ndt.setStepSize(vm["ndt.step_size"].as<float>());
+    ndt.setMaximumIterations(vm["ndt.max_iter"].as<size_t>());
 }	
 
-void Localizer::initIMU(cc::World& world, boost::shared_ptr<cc::BlueprintLibrary> bpl,
+void Localizer::initIMU(const po::variables_map& vm, cc::World& world,
+                        boost::shared_ptr<cc::BlueprintLibrary> bpl,
                         boost::shared_ptr<cc::Actor> ego)
 {
     auto imu_bp = *(bpl->Find("sensor.other.imu"));
     imu_bp.SetAttribute("noise_accel_stddev_x", "0");
     imu_bp.SetAttribute("noise_accel_stddev_y", "0");
     imu_bp.SetAttribute("noise_gyro_stddev_z", "0");
+    imu_bp.SetAttribute("sensor_tick", vm["imu.sensor_tick"].as<string>());
     auto imu_actor = world.SpawnActor(imu_bp,
                                         cg::Transform(cg::Location(-0.5, 0, 1.8)),
                                         ego.get());
     imu = boost::static_pointer_cast<cc::Sensor>(imu_actor);
     imu->Listen([this] (auto data) {
-        if (!imuReady) {
-            auto imu_meas = boost::static_pointer_cast<csd::IMUMeasurement>(data);
-            cg::Vector3D accel = imu_meas->GetAccelerometer();
-            meas.a = accel.x;
-            meas.w = imu_meas->GetGyroscope().z;
-            // cout << accel.x << ' ' << accel.y << ' ' << accel.z << ' ' << meas.w << endl;
-            imuReady = true;
+        if (!imu_meas) {
+            auto meas = boost::static_pointer_cast<csd::IMUMeasurement>(data);
+            imu_meas.emplace(max(min(meas->GetAccelerometer().x, max_accel), -max_accel),
+                             max(min(meas->GetAccelerometer().y, max_accel), -max_accel),
+                             meas->GetGyroscope().z);
         }
     });
 }
 
-pair<Matrix4f, PointCloudT::Ptr> Localizer::NDT() {
-    Matrix4f startingTrans = getTransform(pose);
-
-    PointCloudT::Ptr aligned (make_shared<PointCloudT>());
-    ndt.align(*aligned, startingTrans);
-
-    if (!ndt.hasConverged()) {
-        std::cout << "didn't converge" << std::endl;
-        return {Matrix4f::Identity(), aligned};
+void Localizer::Localize() {
+    if (imu_meas) {
+        kalman.Predict(*imu_meas);
+        imu_meas.reset();
     }
-    Matrix4f transform = ndt.getFinalTransformation();
-    return {transform, aligned};
-}
-
-const PointCloudT::Ptr Localizer::Localize() {
-    // Find pose transform by using NDT matching
-    auto [transform, scanAligned] = NDT();
-    pose = getPose(transform);
-
-    if (kalman.has_value()) {
-        // Fulfill measurement
-        meas.x = pose.position.x;
-        meas.y = pose.position.y;
-        meas.yaw = pose.rotation.yaw;
-
-        // Update timedelta
-        auto dt = duration_cast<milliseconds>(
-            system_clock::now() - lastUpdateTime
-        );
-        double dt_sec = (double)dt.count() / 1000;
-
-        // Get updated KF state
-        kalman.value().Update(meas, dt_sec);
-        pose = kalman.value().getPose();
-        transform = getTransform(pose);
+    if (gnss_meas) {
+        kalman.Correct(*gnss_meas);
+        gnss_meas.reset();
     }
+    if (lidar_meas) {
+        kalman.Correct(*lidar_meas);
+        lidar_meas.reset();
+    }
+    // // Get updated KF state
+    pose = kalman.getPose();
+    transform = getTransform(pose);
+
     // Transform scan so it aligns with ego's actual pose and render the scan
-    pcl::transformPointCloud(*currentCloud, *scanAligned, transform);
-    currentCloud->clear();
-    ndtReady = false;
-    imuReady = false;
-    lastUpdateTime = system_clock::now();
-    return scanAligned;
+    pcl::transformPointCloud(*cloudCurrent, *cloudAligned, transform);
+    cloudCurrent->clear();
 }

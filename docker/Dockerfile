@@ -15,9 +15,10 @@ RUN git clone https://github.com/carla-simulator/carla
 RUN cd carla/Examples/CppClient && make run
 
 # Insert project files
+COPY /include ./include
 COPY /src ./src
 COPY /data ./data
-COPY CMakeLists.txt ./
+COPY CMakeLists.txt config.cfg ./
 
 # Build project
 WORKDIR /home/pcl

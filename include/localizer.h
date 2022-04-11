@@ -1,6 +1,5 @@
 #pragma once
 
-#include <chrono>
 #include <boost/program_options.hpp>
 #include <carla/client/Sensor.h>
 #include <carla/client/BlueprintLibrary.h>
@@ -9,8 +8,9 @@
 #include "helper.h"
 #include "kalman.h"
 
+namespace cs = carla::sensor;
+namespace csd = carla::sensor::data;
 namespace po = boost::program_options;
-using namespace std::chrono;
 
 using std::string;
 using std::pair;
@@ -22,47 +22,60 @@ using Eigen::Matrix4f;
 class Localizer {
 private:
 	Pose pose;
-	bool ndtReady, imuReady;
+	Matrix4f transform;
 	size_t batch_size;
 	float min_pnt_dist;
-	Measurement meas;
-	optional<KalmanFilter> kalman;
-	time_point<system_clock> lastUpdateTime;
-	PointCloudT::Ptr currentCloud, cloudFiltered;
+	KalmanFilter kalman;
+	PointCloudT::Ptr cloudCurrent, cloudFiltered, cloudAligned;
 	boost::shared_ptr<cc::Actor> ego;
-	boost::shared_ptr<cc::Sensor> lidar, imu;
 	pcl::NormalDistributionsTransform<PointT, PointT> ndt;
+	float max_accel = 10;
+	// sensors
+	boost::shared_ptr<cc::Sensor> gnss, lidar, imu;
+	optional<IMUMeasurement> imu_meas;
+	optional<GNSSMeasurement> gnss_meas;
+	optional<LidarMeasurement> lidar_meas;
 
-	void initLidar(cc::World& world, boost::shared_ptr<cc::BlueprintLibrary> bpl,
-                   boost::shared_ptr<cc::Actor> ego, const string& rot_frq, const string& pts_per_sec);
 
-	void initNDT(PointCloudT::Ptr mapCloud, float trans_eps,
-				 float resolution, float step_size, size_t max_iter);
+	void initGNSS(const po::variables_map& vm, cc::World& world,
+				  boost::shared_ptr<cc::BlueprintLibrary> bpl,
+				  boost::shared_ptr<cc::Actor> ego);
 
-	void initIMU(cc::World& world, boost::shared_ptr<cc::BlueprintLibrary> bpl,
+	void initLidar(const po::variables_map& vm, cc::World& world,
+				   boost::shared_ptr<cc::BlueprintLibrary> bpl,
+                   boost::shared_ptr<cc::Actor> ego);
+
+	void initNDT(const po::variables_map& vm, PointCloudT::Ptr mapCloud);
+
+	void initIMU(const po::variables_map& vm, cc::World& world,
+				 boost::shared_ptr<cc::BlueprintLibrary> bpl,
                  boost::shared_ptr<cc::Actor> ego);
 
 public:
-	Localizer(const po::variables_map& vm, cc::World& world,
+	Localizer(const po::variables_map& vm, KalmanFilter& kalman, cc::World& world,
 			  boost::shared_ptr<cc::BlueprintLibrary> bpl,
               boost::shared_ptr<cc::Actor> ego, PointCloudT::Ptr mapCloud);
 
-	pair<Matrix4f, PointCloudT::Ptr> NDT();
-	const PointCloudT::Ptr Localize();
+	void Localize();
 
 	bool MeasurementIsReady() const {
-		return ndtReady && imuReady;
+		return imu_meas || gnss_meas || lidar_meas;
 	}
 
 	const Pose& GetPose() const {
 		return pose;
 	}
 
+	const PointCloudT::Ptr GetCloudAligned() const {
+		return cloudAligned;
+	}
+
 	~Localizer() {
 		cout << "Destroyed:"
-			 << "\n -lidar: " << lidar->Destroy()		
-			 << "\n -imu: " << imu->Destroy()
-			 << "\n -ego: " << ego->Destroy()
-			 << endl;
+			 << "\n -ego: " << ego->Destroy();
+		if (gnss)  cout << "\n -gnss: "  << gnss->Destroy();
+		if (imu)   cout << "\n -imu: "   << imu->Destroy();
+		if (lidar) cout << "\n -lidar: " << lidar->Destroy();
+		cout << endl;
 	}
 };
