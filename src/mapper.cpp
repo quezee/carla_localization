@@ -22,7 +22,6 @@
 #include <carla/sensor/data/IMUMeasurement.h>
 
 #include "helper.h"
-#include "kalman.h"
 
 using namespace std;
 using namespace chrono;
@@ -66,11 +65,11 @@ class Mapper {
 private:
 	Pose truePose, poseRef;
 	Eigen::Matrix4f trueTransform;
-	bool scanIsReady {false};
+	bool scanIsReady = false;
 	boost::shared_ptr<cc::Vehicle> vehicle;
 	boost::shared_ptr<cc::Sensor> lidar;
 	pcl::visualization::PCLVisualizer::Ptr viewer;
-	int batchSize {0};
+	int batchSize;
 	int batchCounter;
 
 	void initLidar(cc::World& world, cptr<cc::BlueprintLibrary> bpl, cptr<cc::Actor> ego) {
@@ -122,6 +121,12 @@ public:
 	bool& ScanIsReady() {
 		return scanIsReady;
 	}
+	~Mapper() {
+		cout << "Destroyed:"
+			 << "\n -ego: " << vehicle->Destroy()
+			 << "\n -lidar: " << lidar->Destroy()
+			 << endl;
+	}
 };
 
 
@@ -143,6 +148,7 @@ int main() {
 	viewer->registerKeyboardCallback(keyboardEventOccurred, (void*)&viewer);
 
 	auto vehicle = boost::static_pointer_cast<cc::Vehicle>(ego);
+	vehicle->SetAutopilot();
 
 	Pose poseRef = getTruePose(vehicle);
 	Mapper mapper (world, blueprint_library, ego, vehicle, viewer, poseRef);
@@ -174,6 +180,11 @@ int main() {
 			Accuate(accuate, control);
 			vehicle->ApplyControl(control);
 		}
+		// skip traffic light
+		auto tl = vehicle->GetTrafficLight();
+		if (tl)
+			tl->SetState(carla::rpc::TrafficLightState::Green);
+
   		viewer->spinOnce ();
 		mapper.ScanIsReady() = false;
 	}
