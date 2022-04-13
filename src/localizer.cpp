@@ -75,14 +75,17 @@ void Localizer::initLidar(const po::variables_map& vm, cc::World& world,
                     cloudCurrent->emplace_back(detection.point.x, detection.point.y, detection.point.z);
             
             if (cloudCurrent->size() >= batch_size) {
+                // get NDT transform
+                transform = getTransform(pose);
                 ndt.align(*cloudAligned, transform);
-                if (ndt.hasConverged()) {
-                    Matrix4f new_transform = ndt.getFinalTransformation();
-                    lidar_meas.emplace(getX(new_transform), getY(new_transform), getYaw(new_transform));
-                } else {
-                    std::cout << "NDT didn't converge" << std::endl;
-                    lidar_meas.emplace(getX(transform), getY(transform), getYaw(transform));
-                }
+                const Matrix4f& new_transform = ndt.getFinalTransformation();
+                lidar_meas.emplace(getX(new_transform), getY(new_transform), getYaw(new_transform));
+                // align scan so it aligns with ego's actual pose
+                if (ndt.hasConverged())
+                    pcl::transformPointCloud(*cloudCurrent, *cloudAligned, new_transform);
+                else
+                    pcl::transformPointCloud(*cloudCurrent, *cloudAligned, transform);
+                cloudCurrent->clear();
             }
         }
     });
@@ -124,21 +127,20 @@ void Localizer::initIMU(const po::variables_map& vm, cc::World& world,
 void Localizer::Localize() {
     if (imu_meas) {
         kalman.Predict(*imu_meas);
+        pose = kalman.getPose();
         imu_meas.reset();
     }
     if (gnss_meas) {
         kalman.Correct(*gnss_meas);
+        pose = kalman.getPose();
         gnss_meas.reset();
     }
     if (lidar_meas) {
-        kalman.Correct(*lidar_meas);
+        if (ndt.hasConverged()) {
+            kalman.Correct(*lidar_meas);
+            pose = kalman.getPose();
+        } else
+            std::cout << "NDT didn't converge" << std::endl;
         lidar_meas.reset();
     }
-    // // Get updated KF state
-    pose = kalman.getPose();
-    transform = getTransform(pose);
-
-    // Transform scan so it aligns with ego's actual pose and render the scan
-    pcl::transformPointCloud(*cloudCurrent, *cloudAligned, transform);
-    cloudCurrent->clear();
 }

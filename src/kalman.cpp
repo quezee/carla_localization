@@ -3,33 +3,57 @@
 using namespace Eigen;
 
 
-KalmanFilter::KalmanFilter(const Matrix2d& R_gnss, const Matrix3d& R_lidar, const Matrix5d& Q,
-                           double P_init, const Pose& poseRef)
-    : R_gnss(R_gnss), R_lidar(R_lidar), Q(Q)
-    , poseRef(poseRef), lastUpdateTime(system_clock::now())
+KalmanFilter::KalmanFilter(const po::variables_map& vm, const Pose& poseRef)
+    : poseRef(poseRef)
+    , lastUpdateTime(system_clock::now())
+    , var_jerk(vm["kalman.var_jerk"].as<double>())
+    , var_yaw_a(vm["kalman.var_yaw_a"].as<double>())
 {
     x.setZero();
 
     P.setIdentity();
-    P *= P_init;
+    P.diagonal() *= vm["kalman.P_init"].as<double>();
+    P_a.setZero();
+
+	R_gnss.setZero();
+	R_gnss.diagonal() << vm["gnss.var_lat"].as<double>(),
+                         vm["gnss.var_lon"].as<double>();
+
+	R_lidar.setZero();
+	R_lidar.diagonal() << vm["lidar.var_x"].as<double>(),
+                          vm["lidar.var_y"].as<double>(),
+						  vm["lidar.var_yaw"].as<double>();
 
     CalculateSigmaPoints();
 
-    weights.setZero(n_sigmas, 1);
-    weights.fill(1 / (2*(lambda + n_x)));
-    weights(0) = lambda / (lambda + n_x);
+    weights.fill(1 / (2*(lambda + n_a)));
+    weights(0) = lambda / (lambda + n_a);
 }
 
 void KalmanFilter::CalculateSigmaPoints() {
-    // calculate square root of P_aug
-    Matrix5d L = P.llt().matrixL();
+    // set augmented state
+    x_a.setZero();
+    x_a.topRows(n_x) = x;
+    // cout << "x_a\n" << x_a << endl;
+
+    // set augmented state covariance
+    P_a.setZero();
+    P_a.topLeftCorner(n_x, n_x) = P;
+    P_a(n_x, n_x)     = var_jerk;
+    P_a(n_x+1, n_x+1) = var_yaw_a;
+    // cout << "P\n" << P << endl;
+
+    // calculate square root of P_a
+    Matrix7d L = P_a.llt().matrixL();
+    // cout << "L\n" << L << endl;
 
     // calculate sigma points
-    Xsig.col(0) = x;
-    for (int i = 0; i < n_x; ++i) {
-        Xsig.col(i+1)     = x + sqrt(lambda+n_x) * L.col(i);
-        Xsig.col(i+1+n_x) = x - sqrt(lambda+n_x) * L.col(i);
+    Xsig.col(0) = x_a;
+    for (int i = 0; i < n_a; ++i) {
+        Xsig.col(i+1)     = x_a + sqrt(lambda+n_a) * L.col(i);
+        Xsig.col(i+1+n_a) = x_a - sqrt(lambda+n_a) * L.col(i);
     }
+    // cout << "Xsig\n" << Xsig << endl;
 }
 
 void KalmanFilter::TruncateYaw(double& yaw) {
@@ -39,18 +63,25 @@ void KalmanFilter::TruncateYaw(double& yaw) {
         yaw += 2*M_PI;
 }
 
-Vector5d KalmanFilter::ApplyMotion(const Vector5d& state, const IMUMeasurement& meas, double dt)
+Vector5d KalmanFilter::ApplyMotion(const Vector7d& state, const IMUMeasurement& meas, double dt)
 {
     Vector2d pos = state.segment<2>(0);
     Vector2d vel = state.segment<2>(3);
-
     double yaw = state(2);
-    Matrix2d rot = Rotation2D<double>(yaw).toRotationMatrix().transpose();
+    double jerk = state(5);
+    double yaw_a = state(6);
+    
+    Matrix2d rot = Rotation2D<double>(yaw).toRotationMatrix();
     Vector2d accel {meas.ax, meas.ay};
 
+    // add IMU inputs
     pos += dt * vel + pow(dt, 2) / 2 * (rot*accel); // TODO double calc
     vel += dt * rot*accel;
     yaw += dt * meas.yaw_rate;
+    // add process noise
+    pos.array() += jerk * pow(dt, 3) / 6;
+    vel.array() += jerk * pow(dt, 2) / 2;
+    yaw += yaw_a * pow(dt, 2) / 2;
     TruncateYaw(yaw);
 
     Vector5d state_pred; // TODO make inplace
@@ -71,94 +102,83 @@ void KalmanFilter::Predict(const IMUMeasurement& meas) {
     // apply motion to sigma points
     double dt = GetTimedelta();
     for (int i = 0; i < Xsig.cols(); i++)
-        Xsig.col(i) = ApplyMotion(Xsig.col(i), meas, dt);
+        Xsig.col(i).head<5>() = ApplyMotion(Xsig.col(i), meas, dt);
+    // cout << "Xsig\n" << Xsig << endl;
     
     // calculate predicted state
-    x = Xsig * weights;
+    x = Xsig.topRows(n_x) * weights;
+    // cout << "x\n" << x << endl;
     // calculate predicted covariance matrix
-    P = Q;
+    P.setZero();
     VectorXd x_diff (n_x);
     for (int i = 0; i < weights.rows(); ++i) {
-        x_diff = Xsig.col(i) - x;
+        x_diff = Xsig.col(i).head<5>() - x;
+        TruncateYaw(x_diff(2));
         P += weights(i) * x_diff * x_diff.transpose();
     }
+    // cout << "P\n" << P << endl;
     lastUpdateTime = system_clock::now();
+}
+
+void KalmanFilter::CorrectInner(const MatrixXd& Zsig, const VectorXd& z_pred,
+                                const MatrixXd& R, const VectorXd& z)
+{
+    // calculate predicted measurements covar.
+    size_t n_z = z.size();
+    MatrixXd S = R;
+    VectorXd z_diff (n_z);
+    for (int i = 0; i < weights.rows(); ++i) {
+        z_diff = Zsig.col(i) - z_pred; // TODO Zsig_normed
+        TruncateYaw(z_diff(2));
+        S += weights(i) * z_diff * z_diff.transpose();
+    }
+    // calculate cross-corr. between sigmas in state vs measurement spaces
+    MatrixXd T (n_x, n_z);
+    T.setZero();
+    VectorXd x_diff (n_x);
+    for (int i = 0; i < weights.rows(); ++i) {
+        x_diff = Xsig.col(i).head<5>() - x;
+        z_diff = Zsig.col(i) - z_pred;
+        TruncateYaw(x_diff(2));
+        if (n_z > 2) TruncateYaw(z_diff(2));
+        T += weights(i) * x_diff * z_diff.transpose();
+    }
+    // calculate Kalman gain
+    MatrixXd K = T * S.inverse();
+    // update state
+    VectorXd dx = K * (z - z_pred);
+    x += dx;
+    TruncateYaw(x(2));
+    // update estimation error covar.
+    P -= K * S * K.transpose();
+    cout << "P\n" << P.norm() << endl;
+    
+    lastUpdateTime = system_clock::now();    
 }
 
 void KalmanFilter::Correct(const LidarMeasurement& meas) {
     // calculate predicted measurements
     auto Zsig = Xsig.topRows(meas.dim);
     auto z_pred = x.topRows(meas.dim);
-
-    // calculate predicted measurements covar.
-    auto S = R_lidar;
-    VectorXd z_diff (meas.dim);
-    for (int i = 0; i < weights.rows(); ++i) {
-        z_diff = Zsig.col(i) - z_pred; // TODO Zsig_normed
-        S += weights(i) * z_diff * z_diff.transpose();
-    }
-
-    // calculate cross-corr. between sigmas in state vs measurement spaces
-    MatrixXd T (n_x, meas.dim);
-    T.setZero();
-    VectorXd x_diff (n_x);
-    for (int i = 0; i < weights.rows(); ++i) {
-        x_diff = Xsig.col(i) - x;
-        z_diff = Zsig.col(i) - z_pred;
-        T += weights(i) * x_diff * z_diff.transpose();
-    }
-    
-    // calculate Kalman gain
-    auto K = T * S.inverse();
-    // update state
+    // compose input measurement
     VectorXd z (meas.dim);
     z << meas.x, meas.y, meas.yaw;
-    VectorXd dx = K * (z - z_pred);
-    x += dx;
-    TruncateYaw(x(2));
-    // update estimation error covar.
-    P -= K * S * K.transpose();
-
-    lastUpdateTime = system_clock::now();    
+    // commit state correction
+    CorrectInner(Zsig, z_pred, R_lidar, z);
 }
 
 void KalmanFilter::Correct(const GNSSMeasurement& meas) {
     // calculate predicted measurements
     auto Zsig = Xsig.topRows(meas.dim);
     auto z_pred = x.topRows(meas.dim);
-
-    // calculate predicted measurements covar.
-    auto S = R_gnss;
-    VectorXd z_diff (meas.dim);
-    for (int i = 0; i < weights.rows(); ++i) {
-        z_diff = Zsig.col(i) - z_pred;
-        S += weights(i) * z_diff * z_diff.transpose();
-    }
-
-    // calculate cross-corr. between sigmas in state vs measurement spaces
-    MatrixXd T (n_x, meas.dim);
-    T.setZero();
-    VectorXd x_diff (n_x);
-    for (int i = 0; i < weights.rows(); ++i) {
-        x_diff = Xsig.col(i) - x;
-        z_diff = Zsig.col(i) - z_pred;
-        T += weights(i) * x_diff * z_diff.transpose();
-    }
-
-    // calculate Kalman gain
-    auto K = T * S.inverse();
-    // update state
+    // compose input measurement
     VectorXd z (meas.dim);
     cg::Location meas_loc = gnss2location({meas.lat, meas.lon, 0});
     meas_loc.x -= poseRef.position.x;
     meas_loc.y -= poseRef.position.y;
     z << meas_loc.x, meas_loc.y;
-    VectorXd dx = K * (z - z_pred);
-    x += dx;
-    // update estimation error covar.
-    P -= K * S * K.transpose();
-
-    lastUpdateTime = system_clock::now();    
+    // commit state correction
+    CorrectInner(Zsig, z_pred, R_gnss, z);
 }
 
 Pose KalmanFilter::getPose() const {

@@ -71,11 +71,10 @@ public:
 	}
 
 	~Localizer() {
-		cout << "Destroyed:"
-			 << "\n -ego: " << ego->Destroy();
+		cout << "Destroyed:";
 		if (gnss)  cout << "\n -gnss: "  << gnss->Destroy();
 		if (imu)   cout << "\n -imu: "   << imu->Destroy();
 		if (lidar) cout << "\n -lidar: " << lidar->Destroy();
-		cout << endl;
+		cout << "\n -ego: " << ego->Destroy() << endl;
 	}
 };

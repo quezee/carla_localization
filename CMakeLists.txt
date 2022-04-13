@@ -12,6 +12,7 @@ set(CXX_FLAGS "-pthread -fPIC -DNDEBUG -Wextra")
 set(CMAKE_CXX_FLAGS "${CXX_FLAGS} -Wl,-Bstatic -lboost_filesystem -Wl,-Bdynamic")
 
 set(sources src/main.cpp src/localizer.cpp src/helper.cpp src/kalman.cpp)
+# set(sources src/mapper.cpp src/helper.cpp)
 include_directories(include)
 
 set(CARLALIB_DIR /home/pcl/carla/Examples/CppClient/libcarla-install/lib)

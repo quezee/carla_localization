@@ -24,9 +24,6 @@ po::variables_map parse_config(int argc, char *argv[]) {
 		("general.use_imu", po::value<bool>()->required())
 		("general.use_lidar", po::value<bool>()->required())
 
-		("imu.var_x", po::value<double>()->required())
-		("imu.var_y", po::value<double>()->required())
-		("imu.var_yaw", po::value<double>()->required())
 		("imu.sensor_tick", po::value<string>()->required())
 
 		("gnss.var_lat", po::value<double>()->required())
@@ -52,6 +49,8 @@ po::variables_map parse_config(int argc, char *argv[]) {
 		("ndt.max_iter", po::value<size_t>()->required(), "newton max iterations")
 
 		("kalman.P_init", po::value<double>()->required())
+		("kalman.var_jerk", po::value<double>()->required())
+		("kalman.var_yaw_a", po::value<double>()->required())
 	;
 	po::variables_map vm;
 	po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -116,24 +115,8 @@ int main(int argc, char *argv[]) {
 	renderPointCloud(viewer, mapCloud, "map", Color(0,0,1)); 
 
 	// set localizer
-	Matrix2d R_gnss;
-	R_gnss.setZero();
-	R_gnss.diagonal() << vm["gnss.var_lat"].as<double>(), vm["gnss.var_lon"].as<double>();
-
-	Matrix3d R_lidar;
-	R_lidar.setZero();
-	R_lidar.diagonal() << vm["lidar.var_x"].as<double>(), vm["lidar.var_y"].as<double>(),
-						  vm["lidar.var_yaw"].as<double>();
-
-	Matrix5d Q;
-	Q.setZero();
-	Q.diagonal() << vm["imu.var_x"].as<double>(), vm["imu.var_y"].as<double>(),
-					vm["imu.var_yaw"].as<double>(), 0, 0;
-	
-	double P_init = vm["kalman.P_init"].as<double>();
-
 	Pose poseRef = getTruePose(vehicle);
-	KalmanFilter kalman (R_gnss, R_lidar, Q, P_init, poseRef);	
+	KalmanFilter kalman (vm, poseRef);
 	Localizer localizer (vm, kalman, world, blueprint_library, ego, mapCloud);
 
 	// main loop
@@ -172,7 +155,7 @@ int main(int argc, char *argv[]) {
 			Accuate(accuate, control);
 			vehicle->ApplyControl(control);
 		}
-		// skip traffic light
+		// skip traffic light // TODO
 		// auto tl = vehicle->GetTrafficLight();
 		// if (tl)
 		// 	tl->SetState(carla::rpc::TrafficLightState::Green);
