@@ -10,6 +10,7 @@ KalmanFilter::KalmanFilter(const po::variables_map& vm, const Pose& poseRef)
     , var_yaw_a(vm["kalman.var_yaw_a"].as<double>())
 {
     x.setZero();
+    Xsig.setZero();
 
     P.setIdentity();
     P.diagonal() *= vm["kalman.P_init"].as<double>();
@@ -34,18 +35,15 @@ void KalmanFilter::CalculateSigmaPoints() {
     // set augmented state
     x_a.setZero();
     x_a.topRows(n_x) = x;
-    // cout << "x_a\n" << x_a << endl;
 
     // set augmented state covariance
     P_a.setZero();
     P_a.topLeftCorner(n_x, n_x) = P;
     P_a(n_x, n_x)     = var_jerk;
     P_a(n_x+1, n_x+1) = var_yaw_a;
-    // cout << "P\n" << P << endl;
 
     // calculate square root of P_a
     Matrix7d L = P_a.llt().matrixL();
-    // cout << "L\n" << L << endl;
 
     // calculate sigma points
     Xsig.col(0) = x_a;
@@ -53,7 +51,6 @@ void KalmanFilter::CalculateSigmaPoints() {
         Xsig.col(i+1)     = x_a + sqrt(lambda+n_a) * L.col(i);
         Xsig.col(i+1+n_a) = x_a - sqrt(lambda+n_a) * L.col(i);
     }
-    // cout << "Xsig\n" << Xsig << endl;
 }
 
 void KalmanFilter::TruncateYaw(double& yaw) {
@@ -93,21 +90,21 @@ double KalmanFilter::GetTimedelta() {
     auto dt = duration_cast<milliseconds>(
         system_clock::now() - lastUpdateTime
     );
-    return dt.count() / 1000.;        
+    return dt.count() / 1000.;
 }
 
 void KalmanFilter::Predict(const IMUMeasurement& meas) {
     CalculateSigmaPoints();
 
-    // apply motion to sigma points
     double dt = GetTimedelta();
+    lastUpdateTime = system_clock::now();
+
+    // apply motion to sigma points
     for (int i = 0; i < Xsig.cols(); i++)
         Xsig.col(i).head<5>() = ApplyMotion(Xsig.col(i), meas, dt);
-    // cout << "Xsig\n" << Xsig << endl;
     
     // calculate predicted state
     x = Xsig.topRows(n_x) * weights;
-    // cout << "x\n" << x << endl;
     // calculate predicted covariance matrix
     P.setZero();
     VectorXd x_diff (n_x);
@@ -116,8 +113,6 @@ void KalmanFilter::Predict(const IMUMeasurement& meas) {
         TruncateYaw(x_diff(2));
         P += weights(i) * x_diff * x_diff.transpose();
     }
-    // cout << "P\n" << P << endl;
-    lastUpdateTime = system_clock::now();
 }
 
 void KalmanFilter::CorrectInner(const MatrixXd& Zsig, const VectorXd& z_pred,
@@ -151,8 +146,7 @@ void KalmanFilter::CorrectInner(const MatrixXd& Zsig, const VectorXd& z_pred,
     TruncateYaw(x(2));
     // update estimation error covar.
     P -= K * S * K.transpose();
-    cout << "P\n" << P.norm() << endl;
-    
+    // cout << "P\n" << P.norm() << endl;
     lastUpdateTime = system_clock::now();    
 }
 
