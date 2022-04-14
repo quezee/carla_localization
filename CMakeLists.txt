@@ -5,7 +5,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 cmake_minimum_required (VERSION 3.10)
 
 # -g allows for gdb debugging
-# turn on -03 for best performance
+# turn on -O3 for best performance
 add_definitions(-std=c++17 -O3)
 
 set(CXX_FLAGS "-pthread -fPIC -DNDEBUG -Wextra")

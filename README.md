@@ -1,16 +1,19 @@
-# Scan Matching Localization
+# CARLA Localization
 
 ## Goal
 
-Localize a car driving in simulation. The simulation car is equipped with a lidar, provided by the simulator at regular intervals are lidar scans. There is also a point cloud map [map.pcd](https://github.com/quezee/carla_localization/blob/main/data/map1.pcd) already extracted from the CARLA simulator.
+Build localization solution for a car driving in CARLA simulator with respect to pre-extracted [point cloud map](https://github.com/quezee/carla_localization/blob/main/data/map1.pcd).
 
 ## Developed solution
 
-Normal Distribution Transform + Unscented Kalman Filter.
+Unscented Kalman Filter fusing IMU, GNSS and lidar sensors.<br>
+Lidar scans are matched with Normal Distribution Transform.
 
-## Result
+Project parameters are configured through [config.cfg](https://github.com/quezee/carla_localization/blob/main/config.cfg)
 
-![](https://github.com/quezee/carla_localization/blob/main/result.gif)
+## Demo result
+
+<img src="https://github.com/quezee/carla_localization/blob/main/demo1.gif" width="600">
 
 ## Usage
 
@@ -22,7 +25,7 @@ docker pull carlasim/carla:0.9.13
 ```
 docker run --privileged --gpus all --net=host carlasim/carla:0.9.13 /bin/bash ./CarlaUE4.sh -RenderOffScreen
 ```
-3. Build project image (client) from repo root. It will test connection with CARLA container by the end of build process.
+3. Build project image (client) from repo root. It will test connection with CARLA server by the end of build process.
 ```
 docker build -t carla_localization --network=host -f docker/Dockerfile .
 ```
@@ -30,5 +33,4 @@ docker build -t carla_localization --network=host -f docker/Dockerfile .
 ```
 docker run --gpus all --net=host -e DISPLAY=$DISPLAY carla_localization
 ```
-
-Tap the UP key up to 4 times to gain some speed and use LEFT/RIGHT to steer the wheel.
+Before 4. you may need to run ```xhost +si:localuser:root``` to let docker access your display.

@@ -16,7 +16,6 @@ bool refresh_view = false;
 po::variables_map parse_config(int argc, char *argv[]) {
 	po::options_description desc("Configuration");
 	desc.add_options()
-		("config", po::value<string>()->default_value("/workspaces/carla_localization/config.cfg"), "path to config")
 		("general.autopilot", po::value<bool>()->required(), "whether to use autopilot for ego")
 		("general.speed_decr", po::value<float>()->required(), "decrease in velocity with respect to speed limit")
 		("general.map", po::value<string>()->required(), "path to pcl map")
@@ -56,7 +55,7 @@ po::variables_map parse_config(int argc, char *argv[]) {
 	po::variables_map vm;
 	po::store(po::parse_command_line(argc, argv, desc), vm);
 
-	string cfg_fname {vm["config"].as<string>()}; 
+	string cfg_fname {"config.cfg"}; 
 	ifstream ifs (cfg_fname);
 	if (ifs.fail())
 		throw std::invalid_argument("Failed to open config file: " + cfg_fname);
