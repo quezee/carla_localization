@@ -18,6 +18,7 @@ po::variables_map parse_config(int argc, char *argv[]) {
 	desc.add_options()
 		("config", po::value<string>()->default_value("/workspaces/carla_localization/config.cfg"), "path to config")
 		("general.autopilot", po::value<bool>()->required(), "whether to use autopilot for ego")
+		("general.speed_decr", po::value<float>()->required(), "decrease in velocity with respect to speed limit")
 		("general.map", po::value<string>()->required(), "path to pcl map")
 		
 		("general.use_gnss", po::value<bool>()->required())
@@ -100,9 +101,11 @@ int main(int argc, char *argv[]) {
 	auto ego = world.SpawnActor((*vehicles)[12], sp_transform);
 
 	auto vehicle = boost::static_pointer_cast<cc::Vehicle>(ego);
-	if (vm["general.autopilot"].as<bool>())
+	if (vm["general.autopilot"].as<bool>()) {
 		vehicle->SetAutopilot();
-
+		auto tm = client.GetInstanceTM();
+		tm.SetPercentageSpeedDifference(ego, vm["general.speed_decr"].as<float>());
+	}
 	// set viewer
 	pv::PCLVisualizer::Ptr viewer = make_shared<pv::PCLVisualizer>("3D Viewer");
   	viewer->setBackgroundColor (0, 0, 0);
@@ -126,9 +129,6 @@ int main(int argc, char *argv[]) {
   
 	while (!viewer->wasStopped())
   	{
-		while (!localizer.MeasurementIsReady()) // TODO mb delete
-			std::this_thread::sleep_for(0.01s);
-
 		if (refresh_view) {
 			const Pose& pose = localizer.GetPose();
 			viewer->setCameraPosition(pose.position.x, pose.position.y, 60,
@@ -155,10 +155,10 @@ int main(int argc, char *argv[]) {
 			Accuate(accuate, control);
 			vehicle->ApplyControl(control);
 		}
-		// skip traffic light // TODO
-		// auto tl = vehicle->GetTrafficLight();
-		// if (tl)
-		// 	tl->SetState(carla::rpc::TrafficLightState::Green);
+		// skip traffic light
+		auto tl = vehicle->GetTrafficLight();
+		if (tl)
+			tl->SetState(carla::rpc::TrafficLightState::Green);
 
   		viewer->spinOnce ();
 		
