@@ -13,6 +13,9 @@ Project parameters are configured through [config.cfg](https://github.com/quezee
 
 ## Demo result
 
+Ground truth box is rendered in red and localization result is in green.<br>
+The 2 boxes are well aligned, so you cannot distinguish them.
+
 <img src="https://github.com/quezee/carla_localization/blob/main/demo1.gif" width="600">
 
 ## Usage
