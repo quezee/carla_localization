@@ -21,39 +21,35 @@ using Eigen::Matrix4f;
 
 class Localizer {
 private:
+	// localized pose and transform
 	Pose pose;
 	Matrix4f transform;
-	size_t batch_size;
-	float min_pnt_dist;
-	KalmanFilter kalman;
+	// lidar related
+	size_t lidar_batch_size;
+	float lidar_min_pnt_dist;
 	PointCloudT::Ptr cloudCurrent, cloudFiltered, cloudAligned;
-	boost::shared_ptr<cc::Actor> ego;
 	pcl::NormalDistributionsTransform<PointT, PointT> ndt;
-	float max_accel = 10;
 	// sensors
 	boost::shared_ptr<cc::Sensor> gnss, lidar, imu;
 	optional<IMUMeasurement> imu_meas;
 	optional<GNSSMeasurement> gnss_meas;
 	optional<LidarMeasurement> lidar_meas;
-
+	// other
+	KalmanFilter kalman;
+	boost::shared_ptr<cc::Actor> ego;
+	float max_accel = 10;
 
 	void initGNSS(const po::variables_map& vm, cc::World& world,
-				  boost::shared_ptr<cc::BlueprintLibrary> bpl,
 				  boost::shared_ptr<cc::Actor> ego);
 
 	void initLidar(const po::variables_map& vm, cc::World& world,
-				   boost::shared_ptr<cc::BlueprintLibrary> bpl,
-                   boost::shared_ptr<cc::Actor> ego);
-
-	void initNDT(const po::variables_map& vm, PointCloudT::Ptr mapCloud);
+                   boost::shared_ptr<cc::Actor> ego, PointCloudT::Ptr mapCloud);
 
 	void initIMU(const po::variables_map& vm, cc::World& world,
-				 boost::shared_ptr<cc::BlueprintLibrary> bpl,
                  boost::shared_ptr<cc::Actor> ego);
 
 public:
 	Localizer(const po::variables_map& vm, KalmanFilter& kalman, cc::World& world,
-			  boost::shared_ptr<cc::BlueprintLibrary> bpl,
               boost::shared_ptr<cc::Actor> ego, PointCloudT::Ptr mapCloud);
 
 	void Localize();

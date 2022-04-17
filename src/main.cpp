@@ -8,7 +8,6 @@ using namespace Eigen;
 using Matrix5d = Matrix<double, 5, 5>;
 
 cc::Vehicle::Control control;
-time_point<system_clock> currentTime;
 vector<ControlState> controls;
 bool refresh_view = false;
 
@@ -20,37 +19,37 @@ po::variables_map parse_config(int argc, char *argv[]) {
 		("general.speed_decr", po::value<float>()->required(), "decrease in velocity with respect to speed limit")
 		("general.map", po::value<string>()->required(), "path to pcl map")
 		
-		("general.use_gnss", po::value<bool>()->required())
-		("general.use_imu", po::value<bool>()->required())
-		("general.use_lidar", po::value<bool>()->required())
+		("general.use_gnss", po::value<bool>()->required(), "whether to use GNSS")
+		("general.use_imu", po::value<bool>()->required(), "whether to use IMU")
+		("general.use_lidar", po::value<bool>()->required(), "whether to use lidar")
 
-		("imu.sensor_tick", po::value<string>()->required())
+		("imu.sensor_tick", po::value<string>()->required(), "simulation seconds between sensor captures")
 
-		("gnss.var_lat", po::value<double>()->required())
-		("gnss.var_lon", po::value<double>()->required())
-		("gnss.lat_bias", po::value<string>()->required())
-		("gnss.lat_stddev", po::value<string>()->required())
-		("gnss.lon_bias", po::value<string>()->required())
-		("gnss.lon_stddev", po::value<string>()->required())
-		("gnss.sensor_tick", po::value<string>()->required())
+		("gnss.var_lat", po::value<double>()->required(), "measurement noise for KF")
+		("gnss.var_lon", po::value<double>()->required(), "measurement noise for KF")
+		("gnss.lat_bias", po::value<string>()->required(), "sensor noise")
+		("gnss.lat_stddev", po::value<string>()->required(), "sensor noise")
+		("gnss.lon_bias", po::value<string>()->required(), "sensor noise")
+		("gnss.lon_stddev", po::value<string>()->required(), "sensor noise")
+		("gnss.sensor_tick", po::value<string>()->required(), "simulation seconds between sensor captures")
 
-		("lidar.var_x", po::value<double>()->required())
-		("lidar.var_y", po::value<double>()->required())
-		("lidar.var_yaw", po::value<double>()->required())
+		("lidar.var_x", po::value<double>()->required(), "measurement noise for KF")
+		("lidar.var_y", po::value<double>()->required(), "measurement noise for KF")
+		("lidar.var_yaw", po::value<double>()->required(), "measurement noise for KF")
 		("lidar.batch_size", po::value<size_t>()->required(), "how many points to accumulate to match scans")
 		("lidar.rot_frq", po::value<string>()->required(), "rotation frequency")
 		("lidar.pts_per_sec", po::value<string>()->required(), "points per second")
 		("lidar.min_pnt_dist", po::value<float>()->required(), "filter out closest points within this radius")
-		("lidar.sensor_tick", po::value<string>()->required())
+		("lidar.sensor_tick", po::value<string>()->required(), "simulation seconds between sensor captures")
 
 		("ndt.trans_eps", po::value<float>()->required(), "transformation epsilon")
 		("ndt.resolution", po::value<float>()->required(), "voxel grid resolution")
 		("ndt.step_size", po::value<float>()->required(), "newton line search max step")
 		("ndt.max_iter", po::value<size_t>()->required(), "newton max iterations")
 
-		("kalman.P_init", po::value<double>()->required())
-		("kalman.var_jerk", po::value<double>()->required())
-		("kalman.var_yaw_a", po::value<double>()->required())
+		("kalman.P_init", po::value<double>()->required(), "init. value for estimation error covariance")
+		("kalman.var_jerk", po::value<double>()->required(), "process noise for KF")
+		("kalman.var_yaw_a", po::value<double>()->required(), "process noise for KF")
 	;
 	po::variables_map vm;
 	po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -119,7 +118,7 @@ int main(int argc, char *argv[]) {
 	// set localizer
 	Pose poseRef = getTruePose(vehicle);
 	KalmanFilter kalman (vm, poseRef);
-	Localizer localizer (vm, kalman, world, blueprint_library, ego, mapCloud);
+	Localizer localizer (vm, kalman, world, ego, mapCloud);
 
 	// main loop
 	double maxError = 0;
